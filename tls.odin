@@ -71,8 +71,6 @@ tls_init :: proc(cert_path: string, key_path: string, allocator := context.alloc
 		return {}, false
 	}
 
-	fmt.println("TLS initialized successfully with ALPN support (h2)")
-
 	return TLS_Context{config = config}, true
 }
 
@@ -141,13 +139,6 @@ tls_negotiate :: proc(tls_conn: ^TLS_Connection) -> TLS_Negotiate_Result {
 	result := s2n.s2n_negotiate(tls_conn.s2n_conn, &blocked)
 
 	if result == s2n.S2N_SUCCESS {
-		// Handshake complete
-		protocol := s2n.s2n_get_application_protocol(tls_conn.s2n_conn)
-		if protocol != nil {
-			fmt.printf("TLS handshake successful, negotiated protocol: %s\n", protocol)
-		} else {
-			fmt.println("TLS handshake successful")
-		}
 		return .Success
 	}
 
@@ -157,20 +148,6 @@ tls_negotiate :: proc(tls_conn: ^TLS_Connection) -> TLS_Negotiate_Result {
 		return .WouldBlock
 	}
 
-	// Error occurred - get detailed error information
-	errno_ptr := s2n.s2n_errno_location()
-	if errno_ptr != nil {
-		error_code := errno_ptr^
-		error_msg := s2n.s2n_strerror(error_code, "EN")
-		error_debug := s2n.s2n_strerror_debug(error_code, "EN")
-		fmt.eprintfln("TLS handshake failed:")
-		fmt.eprintfln("  Error code: %d", error_code)
-		fmt.eprintfln("  Error: %s", error_msg)
-		fmt.eprintfln("  Debug: %s", error_debug)
-		fmt.eprintfln("  Blocked status: %v", blocked)
-	} else {
-		fmt.eprintfln("TLS handshake failed, blocked status: %v", blocked)
-	}
 	return .Error
 }
 

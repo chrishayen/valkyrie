@@ -387,22 +387,56 @@ server_run :: proc(server: ^Server) -> bool {
 			continue
 		}
 
+		// Track connections removed during this batch to prevent fd reuse issues.
+		// Without this, if a connection with fd=N is removed and a new connection
+		// gets assigned fd=N in the same batch (via server_accept), subsequent events
+		// for the old fd=N would be incorrectly processed on the new connection.
+		removed_fds := make(map[linux.Fd]bool, context.temp_allocator)
+
 		// Process events
 		for event in events {
+			// Handle listen socket (accept new connections)
 			if event.fd == server.listen_fd {
-				// New connection
 				server_accept(server)
-			} else {
-				// Existing connection
-				if .Read in event.flags {
-					server_handle_connection_read(server, event.fd)
+				continue
+			}
+
+			// Skip if we already removed this connection in this batch
+			if event.fd in removed_fds {
+				continue
+			}
+
+			// Check if connection still exists (could have been removed by previous event)
+			if event.fd not_in server.connections {
+				continue
+			}
+
+			should_remove := false
+
+			// Process read events
+			if .Read in event.flags {
+				server_handle_connection_read(server, event.fd)
+				// Check if handler removed the connection
+				if event.fd not_in server.connections {
+					removed_fds[event.fd] = true
+					should_remove = true
 				}
-				if .Write in event.flags {
-					server_handle_connection_write(server, event.fd)
+			}
+
+			// Only process write if connection still exists
+			if !should_remove && .Write in event.flags {
+				server_handle_connection_write(server, event.fd)
+				// Check if handler removed the connection
+				if event.fd not_in server.connections {
+					removed_fds[event.fd] = true
+					should_remove = true
 				}
-				if .Error in event.flags || .HangUp in event.flags {
-					server_remove_connection(server, event.fd)
-				}
+			}
+
+			// Handle errors/hangups only if connection hasn't been removed yet
+			if !should_remove && (.Error in event.flags || .HangUp in event.flags) {
+				server_remove_connection(server, event.fd)
+				removed_fds[event.fd] = true
 			}
 		}
 	}

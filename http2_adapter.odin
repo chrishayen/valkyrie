@@ -59,7 +59,6 @@ http2_connection_process :: proc(conn: ^Connection) -> bool {
 			// Process the data through HTTP/2 protocol
 			ok := http2.protocol_handler_process_data(handler, data[:bytes_read])
 			if !ok {
-				fmt.println("HTTP/2 protocol error")
 				return false
 			}
 		}

@@ -22,7 +22,6 @@ Response :: struct {
 request_decode :: proc(decoder: ^hpack.Decoder_Context, header_block: []byte, allocator := context.allocator) -> (req: Request, ok: bool) {
 	headers, err := hpack.decoder_decode_headers(decoder, header_block, allocator)
 	if err != .None {
-		fmt.printfln("HPACK decode error: %v (header_block size: %d bytes)", err, len(header_block))
 		return {}, false
 	}
 

@@ -69,9 +69,7 @@ protocol_handler_process_data :: proc(handler: ^Protocol_Handler, data: []byte) 
 	}
 
 	// Append to read buffer
-	for b in data {
-		append(&handler.read_buffer, b)
-	}
+	append(&handler.read_buffer, ..data)
 
 	// Try to process what we have
 	return protocol_handler_process_buffer(handler)
@@ -93,15 +91,12 @@ protocol_handler_process_buffer :: proc(handler: ^Protocol_Handler) -> bool {
 		// Validate preface
 		err := connection_handle_preface(&handler.conn, handler.read_buffer[:CONNECTION_PREFACE_LENGTH])
 		if err != .None {
-			fmt.println("Invalid preface")
 			return false
 		}
 
 		// Remove preface from buffer
 		copy(handler.read_buffer[:], handler.read_buffer[CONNECTION_PREFACE_LENGTH:])
 		resize(&handler.read_buffer, len(handler.read_buffer) - CONNECTION_PREFACE_LENGTH)
-
-		fmt.println("Preface validated")
 
 		// Send server's SETTINGS frame now that preface is validated
 		protocol_handler_send_initial_settings(handler)
@@ -112,7 +107,6 @@ protocol_handler_process_buffer :: proc(handler: ^Protocol_Handler) -> bool {
 		// Parse frame header
 		frame_header, _, parse_err := parse_frame_header(handler.read_buffer[:FRAME_HEADER_SIZE])
 		if parse_err != .None {
-			fmt.println("Failed to parse frame header")
 			return false
 		}
 
@@ -150,8 +144,6 @@ protocol_handler_process_frame :: proc(handler: ^Protocol_Handler, frame_data: [
 	}
 	payload := frame_data[FRAME_HEADER_SIZE:]
 
-	fmt.printf("Received frame: type=%v stream=%d length=%d\n", header.type, header.stream_id, header.length)
-
 	#partial switch header.type {
 	case .SETTINGS:
 		return protocol_handler_handle_settings(handler, &header, payload)
@@ -166,18 +158,10 @@ protocol_handler_process_frame :: proc(handler: ^Protocol_Handler, frame_data: [
 		// WINDOW_UPDATE handling (not implemented yet)
 		return true
 	case .RST_STREAM:
-		// Parse error code
-		if len(payload) >= 4 {
-			error_code := u32(payload[0]) << 24 | u32(payload[1]) << 16 | u32(payload[2]) << 8 | u32(payload[3])
-			fmt.printf("Received RST_STREAM for stream %d with error code: 0x%x (%v)\n",
-			          header.stream_id, error_code, Error_Code(error_code))
-		}
 		return true
 	case .GOAWAY:
-		// GOAWAY handling (not implemented yet)
-		return true
+		return protocol_handler_handle_goaway(handler, &header, payload)
 	case:
-		fmt.printf("Unhandled frame type: %v\n", header.type)
 		return true
 	}
 }
@@ -191,7 +175,6 @@ protocol_handler_handle_settings :: proc(handler: ^Protocol_Handler, header: ^Fr
 		// ACK our settings
 		settings_frame := Settings_Frame{header = header^, settings = nil}
 		connection_handle_settings(&handler.conn, &settings_frame)
-		fmt.println("Received SETTINGS ACK")
 		return true
 	}
 
@@ -211,25 +194,20 @@ protocol_handler_handle_settings :: proc(handler: ^Protocol_Handler, header: ^Fr
 	settings_frame := Settings_Frame{header = header^, settings = settings}
 	err := connection_handle_settings(&handler.conn, &settings_frame)
 	if err != .None {
-		fmt.println("Failed to handle SETTINGS")
 		return false
 	}
 
 	// Send SETTINGS ACK
 	protocol_handler_send_settings_ack(handler)
 
-	fmt.println("Received and ACKed SETTINGS")
 	return true
 }
 
 // protocol_handler_handle_headers processes a HEADERS frame
 protocol_handler_handle_headers :: proc(handler: ^Protocol_Handler, header: ^Frame_Header, payload: []byte) -> bool {
-	fmt.println("Processing HEADERS frame...")
-
 	// Parse HEADERS frame to extract header block
 	headers_frame, parse_err := parse_headers_frame(header^, payload)
 	if parse_err != .None {
-		fmt.printfln("Failed to parse HEADERS frame: %v", parse_err)
 		return false
 	}
 
@@ -238,7 +216,6 @@ protocol_handler_handle_headers :: proc(handler: ^Protocol_Handler, header: ^Fra
 	if !found {
 		new_stream, err := connection_create_stream(&handler.conn, header.stream_id)
 		if err != .None {
-			fmt.println("Failed to create stream")
 			return false
 		}
 		stream = new_stream
@@ -251,12 +228,9 @@ protocol_handler_handle_headers :: proc(handler: ^Protocol_Handler, header: ^Fra
 	// Decode headers from header block
 	req, ok := request_decode(&handler.decoder, headers_frame.header_block, handler.allocator)
 	if !ok {
-		fmt.println("Failed to decode headers")
 		return false
 	}
 	defer request_destroy(&req)
-
-	fmt.printf("Request: %s %s\n", req.method, req.path)
 
 	// Handle request
 	resp := handle_request(&req, handler.allocator)
@@ -280,6 +254,16 @@ protocol_handler_handle_ping :: proc(handler: ^Protocol_Handler, header: ^Frame_
 	return true
 }
 
+// protocol_handler_handle_goaway processes a GOAWAY frame
+protocol_handler_handle_goaway :: proc(handler: ^Protocol_Handler, header: ^Frame_Header, payload: []byte) -> bool {
+	if len(payload) < 8 {
+		return false
+	}
+
+	// Mark connection as closing - return false to signal connection should be closed
+	return false
+}
+
 // protocol_handler_send_settings_ack sends a SETTINGS ACK frame
 protocol_handler_send_settings_ack :: proc(handler: ^Protocol_Handler) {
 	ack_frame := settings_build_ack_frame()
@@ -295,9 +279,7 @@ protocol_handler_send_ping_ack :: proc(handler: ^Protocol_Handler, data: []byte)
 		stream_id = 0,
 	}
 	protocol_handler_write_frame_header(handler, &header)
-	for b in data {
-		append(&handler.write_buffer, b)
-	}
+	append(&handler.write_buffer, ..data)
 }
 
 // protocol_handler_send_response sends an HTTP/2 response
@@ -305,14 +287,12 @@ protocol_handler_send_response :: proc(handler: ^Protocol_Handler, stream_id: u3
 	// Get stream
 	stream, found := connection_get_stream(&handler.conn, stream_id)
 	if !found {
-		fmt.println("Stream not found for response")
 		return
 	}
 
 	// Encode headers
 	headers_encoded, ok := response_encode(&handler.encoder, resp, handler.allocator)
 	if !ok {
-		fmt.println("Failed to encode response headers")
 		return
 	}
 	defer delete(headers_encoded)
@@ -325,9 +305,7 @@ protocol_handler_send_response :: proc(handler: ^Protocol_Handler, stream_id: u3
 		stream_id = stream_id,
 	}
 	protocol_handler_write_frame_header(handler, &headers_header)
-	for b in headers_encoded {
-		append(&handler.write_buffer, b)
-	}
+	append(&handler.write_buffer, ..headers_encoded)
 
 	// Update stream state for sending HEADERS (without END_STREAM)
 	stream_send_headers(stream, false)
@@ -340,28 +318,27 @@ protocol_handler_send_response :: proc(handler: ^Protocol_Handler, stream_id: u3
 		stream_id = stream_id,
 	}
 	protocol_handler_write_frame_header(handler, &data_header)
-	for b in resp.body {
-		append(&handler.write_buffer, b)
-	}
+	append(&handler.write_buffer, ..resp.body)
 
 	// Update stream state for sending DATA with END_STREAM
 	stream_send_data(stream, len(resp.body), true)
-
-	fmt.printf("Sent response: HEADERS frame (%d bytes) + DATA frame (%d bytes)\n",
-	           9 + len(headers_encoded), 9 + len(resp.body))
 }
 
 // protocol_handler_write_frame_header writes a frame header to the write buffer
 protocol_handler_write_frame_header :: proc(handler: ^Protocol_Handler, header: ^Frame_Header) {
-	append(&handler.write_buffer, u8(header.length >> 16))
-	append(&handler.write_buffer, u8(header.length >> 8))
-	append(&handler.write_buffer, u8(header.length))
-	append(&handler.write_buffer, u8(header.type))
-	append(&handler.write_buffer, header.flags)
-	append(&handler.write_buffer, u8(header.stream_id >> 24))
-	append(&handler.write_buffer, u8(header.stream_id >> 16))
-	append(&handler.write_buffer, u8(header.stream_id >> 8))
-	append(&handler.write_buffer, u8(header.stream_id))
+	// Write all 9 bytes of frame header at once
+	frame_header_bytes := [9]u8{
+		u8(header.length >> 16),
+		u8(header.length >> 8),
+		u8(header.length),
+		u8(header.type),
+		header.flags,
+		u8(header.stream_id >> 24),
+		u8(header.stream_id >> 16),
+		u8(header.stream_id >> 8),
+		u8(header.stream_id),
+	}
+	append(&handler.write_buffer, ..frame_header_bytes[:])
 }
 
 // protocol_handler_get_write_data returns data to write
@@ -404,15 +381,16 @@ protocol_handler_send_initial_settings :: proc(handler: ^Protocol_Handler) {
 
 	protocol_handler_write_frame_header(handler, &settings_frame.header)
 
-	// Write settings payload
+	// Write settings payload - each setting is 6 bytes
 	for setting in settings_frame.settings {
-		append(&handler.write_buffer, u8(u16(setting.id) >> 8))
-		append(&handler.write_buffer, u8(u16(setting.id)))
-		append(&handler.write_buffer, u8(setting.value >> 24))
-		append(&handler.write_buffer, u8(setting.value >> 16))
-		append(&handler.write_buffer, u8(setting.value >> 8))
-		append(&handler.write_buffer, u8(setting.value))
+		setting_bytes := [6]u8{
+			u8(u16(setting.id) >> 8),
+			u8(u16(setting.id)),
+			u8(setting.value >> 24),
+			u8(setting.value >> 16),
+			u8(setting.value >> 8),
+			u8(setting.value),
+		}
+		append(&handler.write_buffer, ..setting_bytes[:])
 	}
-
-	fmt.println("Sent initial SETTINGS")
 }
