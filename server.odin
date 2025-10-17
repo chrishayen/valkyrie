@@ -4,6 +4,7 @@ import "core:sys/linux"
 import "core:net"
 import "core:c"
 import "core:fmt"
+import http2 "http2"
 
 // Server_Config contains server configuration
 Server_Config :: struct {

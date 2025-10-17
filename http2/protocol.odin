@@ -239,6 +239,11 @@ protocol_handler_handle_headers :: proc(handler: ^Protocol_Handler, header: ^Fra
 	// Send response
 	protocol_handler_send_response(handler, header.stream_id, &resp)
 
+	// Clean up closed stream after sending complete response
+	if stream.state == .Closed {
+		connection_remove_stream(&handler.conn, header.stream_id)
+	}
+
 	return true
 }
 

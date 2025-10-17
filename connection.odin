@@ -60,6 +60,8 @@ connection_destroy :: proc(conn: ^Connection) {
 	}
 
 	if conn.fd >= 0 {
+		// Shutdown socket before closing to ensure proper TCP FIN handshake
+		linux.shutdown(conn.fd, .RDWR)
 		linux.close(conn.fd)
 		conn.fd = -1
 	}
