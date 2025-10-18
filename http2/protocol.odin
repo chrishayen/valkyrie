@@ -135,11 +135,13 @@ protocol_handler_process_buffer :: proc(handler: ^Protocol_Handler) -> bool {
 // protocol_handler_process_frame processes a single frame
 protocol_handler_process_frame :: proc(handler: ^Protocol_Handler, frame_data: []byte) -> bool {
 	if handler == nil || len(frame_data) < FRAME_HEADER_SIZE {
+		fmt.eprintln("protocol_handler_process_frame: invalid input")
 		return false
 	}
 
 	header, _, parse_err := parse_frame_header(frame_data[:FRAME_HEADER_SIZE])
 	if parse_err != .None {
+		fmt.eprintfln("protocol_handler_process_frame: failed to parse frame header: %v", parse_err)
 		return false
 	}
 	payload := frame_data[FRAME_HEADER_SIZE:]
@@ -161,6 +163,13 @@ protocol_handler_process_frame :: proc(handler: ^Protocol_Handler, frame_data: [
 		return true
 	case .GOAWAY:
 		return protocol_handler_handle_goaway(handler, &header, payload)
+	case .PRIORITY:
+		// PRIORITY frame - just ignore it
+		return true
+	case .CONTINUATION:
+		// CONTINUATION frame - not supported yet, but don't fail
+		fmt.eprintln("[HTTP/2] CONTINUATION frame not supported yet")
+		return true
 	case:
 		return true
 	}
