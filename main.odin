@@ -25,6 +25,20 @@ SIGPIPE :: c.int(13)
 QUEUE_SIZE :: 4096
 DEFAULT_NUM_WORKERS :: 4
 
+// TLS_Handshake_State tracks the progress of TLS handshake
+TLS_Handshake_State :: enum {
+	Handshaking,  // TLS handshake in progress
+	Ready,        // Handshake complete, ready for HTTP/2
+	Error,        // Handshake failed
+}
+
+// Connection_Metadata tracks per-connection state
+Connection_Metadata :: struct {
+	tls_conn:         Maybe(TLS_Connection),  // TLS connection (if TLS enabled)
+	handshake_state:  TLS_Handshake_State,    // TLS handshake progress
+	is_tls:           bool,                    // Whether this is a TLS connection
+}
+
 // Work_Item represents a unit of work for the thread pool and responses from workers
 Work_Item :: struct {
 	fd:   linux.Fd,
@@ -51,6 +65,11 @@ wakeup_fd: linux.Fd  // eventfd for waking up I/O thread when responses are read
 // HTTP/2 connection handlers (one per file descriptor)
 handlers: map[linux.Fd]http2.Protocol_Handler
 handlers_mutex: sync.Mutex
+
+// TLS support
+tls_ctx: Maybe(TLS_Context)               // Global TLS context (if TLS enabled)
+conn_metadata: map[linux.Fd]Connection_Metadata  // Per-connection metadata
+conn_metadata_mutex: sync.Mutex
 
 // mpsc_queue_init initializes an MPSC queue
 mpsc_queue_init :: proc($T: typeid) -> MPSC_Queue(T) {
@@ -226,10 +245,39 @@ drain_response_queue :: proc(epoll_fd: linux.Fd) {
 		// Write response back to client
 		if work_item.len > 0 {
 			fmt.printfln("[IO] Draining response: %d bytes to fd=%d", work_item.len, work_item.fd)
-			n_written, write_err := linux.write(work_item.fd, work_item.data[:work_item.len])
-			if write_err != .NONE {
+
+			// Check if this is a TLS connection
+			sync.mutex_lock(&conn_metadata_mutex)
+			metadata, found := conn_metadata[work_item.fd]
+			sync.mutex_unlock(&conn_metadata_mutex)
+
+			n_written := 0
+			write_failed := false
+
+			if found && metadata.is_tls {
+				// Use TLS send
+				if tls_conn, ok := metadata.tls_conn.?; ok {
+					tls_conn_mut := tls_conn
+					n_written = tls_send(&tls_conn_mut, work_item.data[:work_item.len])
+					if n_written < 0 {
+						fmt.printfln("[IO] TLS write error on fd=%d", work_item.fd)
+						write_failed = true
+					}
+				}
+			} else {
+				// Use plain write
+				n, write_err := linux.write(work_item.fd, work_item.data[:work_item.len])
+				if write_err != .NONE {
+					fmt.printfln("[IO] Write error %v on fd=%d", write_err, work_item.fd)
+					write_failed = true
+				} else {
+					n_written = int(n)
+				}
+			}
+
+			if write_failed {
 				// Write error - close connection
-				fmt.printfln("[IO] Write error %v on fd=%d, closing connection", write_err, work_item.fd)
+				fmt.printfln("[IO] Closing connection fd=%d due to write failure", work_item.fd)
 				linux.epoll_ctl(epoll_fd, .DEL, work_item.fd, nil)
 				linux.close(work_item.fd)
 
@@ -240,6 +288,17 @@ drain_response_queue :: proc(epoll_fd: linux.Fd) {
 					delete_key(&handlers, work_item.fd)
 				}
 				sync.mutex_unlock(&handlers_mutex)
+
+				// Cleanup TLS connection (thread-safe)
+				sync.mutex_lock(&conn_metadata_mutex)
+				if metadata, found := conn_metadata[work_item.fd]; found {
+					if tls_conn, ok := metadata.tls_conn.?; ok {
+						tls_conn_mut := tls_conn
+						tls_connection_free(&tls_conn_mut)
+					}
+					delete_key(&conn_metadata, work_item.fd)
+				}
+				sync.mutex_unlock(&conn_metadata_mutex)
 			} else {
 				fmt.printfln("[IO] Wrote %d bytes to fd=%d", n_written, work_item.fd)
 			}
@@ -316,12 +375,24 @@ main :: proc() {
 	// Setup signal handler
 	signal(SIGPIPE, SIG_IGN)
 
+	// Initialize TLS if enabled
+	if enable_tls {
+		ctx, ok := tls_init(cert_path, key_path)
+		if !ok {
+			fmt.eprintln("Failed to initialize TLS")
+			return
+		}
+		tls_ctx = ctx
+		fmt.printfln("TLS initialized (cert: %s, key: %s)", cert_path, key_path)
+	}
+
 	// Initialize queues
 	io_to_worker_queue = mpsc_queue_init(Work_Item)
 	worker_to_io_queue = mpsc_queue_init(Work_Item)
 
-	// Initialize handlers map
+	// Initialize handlers and connection metadata maps
 	handlers = make(map[linux.Fd]http2.Protocol_Handler)
+	conn_metadata = make(map[linux.Fd]Connection_Metadata)
 
 	// Start worker threads
 	workers = make([dynamic]^thread.Thread, num_workers)
@@ -490,51 +561,174 @@ main :: proc() {
 
 				fmt.printfln("[IO] Added fd=%d to epoll with edge-triggered mode", client_fd)
 
-				// Create HTTP/2 protocol handler for this connection
-				handler, handler_ok := http2.protocol_handler_init(true)  // true = server
-				if !handler_ok {
-					fmt.printfln("[IO] Failed to create HTTP/2 handler for fd=%d", client_fd)
-					linux.epoll_ctl(epoll_fd, .DEL, client_fd, nil)
-					linux.close(client_fd)
+				// Create connection metadata
+				metadata := Connection_Metadata{
+					is_tls = enable_tls,
+					handshake_state = enable_tls ? .Handshaking : .Ready,
+				}
+
+				// Create TLS connection if enabled
+				if enable_tls {
+					if ctx, ok := tls_ctx.?; ok {
+						tls_conn, tls_ok := tls_connection_new(&ctx, c.int(client_fd))
+						if !tls_ok {
+							fmt.printfln("[IO] Failed to create TLS connection for fd=%d", client_fd)
+							linux.epoll_ctl(epoll_fd, .DEL, client_fd, nil)
+							linux.close(client_fd)
+							continue
+						}
+						metadata.tls_conn = tls_conn
+						fmt.printfln("[IO] Created TLS connection for fd=%d", client_fd)
+					}
+				}
+
+				// Store metadata in map (thread-safe)
+				sync.mutex_lock(&conn_metadata_mutex)
+				conn_metadata[client_fd] = metadata
+				sync.mutex_unlock(&conn_metadata_mutex)
+
+				// Create HTTP/2 protocol handler for this connection (only if not TLS or handshake will complete)
+				if !enable_tls {
+					handler, handler_ok := http2.protocol_handler_init(true)  // true = server
+					if !handler_ok {
+						fmt.printfln("[IO] Failed to create HTTP/2 handler for fd=%d", client_fd)
+						linux.epoll_ctl(epoll_fd, .DEL, client_fd, nil)
+						linux.close(client_fd)
+						continue
+					}
+
+					// Store handler in map (thread-safe)
+					sync.mutex_lock(&handlers_mutex)
+					handlers[client_fd] = handler
+					sync.mutex_unlock(&handlers_mutex)
+
+					fmt.printfln("[IO] Created HTTP/2 handler for fd=%d", client_fd)
+				}
+			} else {
+				// Client socket event - check TLS handshake state first
+				fmt.printfln("[IO] Read event on fd=%d", fd)
+
+				// Get connection metadata (thread-safe)
+				sync.mutex_lock(&conn_metadata_mutex)
+				metadata, found := conn_metadata[fd]
+				sync.mutex_unlock(&conn_metadata_mutex)
+
+				if !found {
+					fmt.printfln("[IO] No metadata found for fd=%d, skipping", fd)
 					continue
 				}
 
-				// Store handler in map (thread-safe)
-				sync.mutex_lock(&handlers_mutex)
-				handlers[client_fd] = handler
-				sync.mutex_unlock(&handlers_mutex)
+				// Handle TLS handshake if in progress
+				if metadata.is_tls && metadata.handshake_state == .Handshaking {
+					if tls_conn, ok := metadata.tls_conn.?; ok {
+						tls_conn_mut := tls_conn
+						result := tls_negotiate(&tls_conn_mut)
 
-				fmt.printfln("[IO] Created HTTP/2 handler for fd=%d", client_fd)
-			} else {
-				// Client socket event - read fully to buffer
-				fmt.printfln("[IO] Read event on fd=%d", fd)
+						switch result {
+						case .Success:
+							fmt.printfln("[IO] TLS handshake complete for fd=%d", fd)
+							metadata.handshake_state = .Ready
+
+							// Create HTTP/2 protocol handler now that handshake is done
+							handler, handler_ok := http2.protocol_handler_init(true)
+							if !handler_ok {
+								fmt.printfln("[IO] Failed to create HTTP/2 handler after TLS handshake for fd=%d", fd)
+								metadata.handshake_state = .Error
+							} else {
+								sync.mutex_lock(&handlers_mutex)
+								handlers[fd] = handler
+								sync.mutex_unlock(&handlers_mutex)
+								fmt.printfln("[IO] Created HTTP/2 handler for fd=%d after TLS handshake", fd)
+							}
+
+							// Update metadata with new TLS connection state
+							metadata.tls_conn = tls_conn_mut
+							sync.mutex_lock(&conn_metadata_mutex)
+							conn_metadata[fd] = metadata
+							sync.mutex_unlock(&conn_metadata_mutex)
+
+						case .WouldBlock:
+							fmt.printfln("[IO] TLS handshake would block for fd=%d, waiting for more data", fd)
+							// Just wait for next epoll event
+							continue
+
+						case .Error:
+							fmt.printfln("[IO] TLS handshake failed for fd=%d", fd)
+							metadata.handshake_state = .Error
+							sync.mutex_lock(&conn_metadata_mutex)
+							conn_metadata[fd] = metadata
+							sync.mutex_unlock(&conn_metadata_mutex)
+
+							// Close connection
+							linux.epoll_ctl(epoll_fd, .DEL, fd, nil)
+							linux.close(fd)
+							continue
+						}
+					}
+				}
+
+				// If handshake failed, skip this connection
+				if metadata.handshake_state == .Error {
+					continue
+				}
+
+				// If TLS handshake still in progress, wait for next event
+				if metadata.is_tls && metadata.handshake_state != .Ready {
+					continue
+				}
+
+				// Read data from socket
 				temp_buf: [4096]u8
 				data_buf: [dynamic]u8
 				total: int
 				last_err: linux.Errno
 				got_eof := false
 
-				for {
-					n_bytes, read_err := linux.read(fd, temp_buf[:])
-					if read_err != .NONE {
-						last_err = read_err
-						if read_err == .EAGAIN || read_err == .EWOULDBLOCK {
-							fmt.printfln("[IO] EAGAIN on fd=%d after reading %d bytes", fd, total)
+				// Use TLS recv if TLS connection, otherwise plain read
+				if metadata.is_tls {
+					if tls_conn, ok := metadata.tls_conn.?; ok {
+						tls_conn_mut := tls_conn
+						for {
+							n_bytes := tls_recv(&tls_conn_mut, temp_buf[:])
+
+							if n_bytes > 0 {
+								append(&data_buf, ..temp_buf[:n_bytes])
+								total += n_bytes
+							} else if n_bytes == 0 {
+								// Would block - just wait for next event
+								// DON'T set got_eof, as 0 can mean "would block"
+								break
+							} else {
+								// Actual error (-1)
+								fmt.printfln("[IO] TLS recv error on fd=%d", fd)
+								got_eof = true
+								break
+							}
+						}
+					}
+				} else {
+					for {
+						n_bytes, read_err := linux.read(fd, temp_buf[:])
+						if read_err != .NONE {
+							last_err = read_err
+							if read_err == .EAGAIN || read_err == .EWOULDBLOCK {
+								fmt.printfln("[IO] EAGAIN on fd=%d after reading %d bytes", fd, total)
+								break
+							}
+							fmt.printfln("[IO] Read error %v on fd=%d", read_err, fd)
 							break
 						}
-						fmt.printfln("[IO] Read error %v on fd=%d", read_err, fd)
-						break
-					}
 
-					if n_bytes == 0 {
-						fmt.printfln("[IO] EOF on fd=%d after reading %d bytes", fd, total)
-						got_eof = true
-						break
-					}
+						if n_bytes == 0 {
+							fmt.printfln("[IO] EOF on fd=%d after reading %d bytes", fd, total)
+							got_eof = true
+							break
+						}
 
-					// Append to buffer
-					append(&data_buf, ..temp_buf[:n_bytes])
-					total += int(n_bytes)
+						// Append to buffer
+						append(&data_buf, ..temp_buf[:n_bytes])
+						total += int(n_bytes)
+					}
 				}
 
 				if total > 0 {
@@ -553,6 +747,17 @@ main :: proc() {
 						delete_key(&handlers, fd)
 					}
 					sync.mutex_unlock(&handlers_mutex)
+
+					// Cleanup TLS connection (thread-safe)
+					sync.mutex_lock(&conn_metadata_mutex)
+					if metadata, found := conn_metadata[fd]; found {
+						if tls_conn, ok := metadata.tls_conn.?; ok {
+							tls_conn_mut := tls_conn
+							tls_connection_free(&tls_conn_mut)
+						}
+						delete_key(&conn_metadata, fd)
+					}
+					sync.mutex_unlock(&conn_metadata_mutex)
 				} else {
 					// EAGAIN with no data - just wait for more
 					fmt.printfln("[IO] No data yet on fd=%d (EAGAIN)", fd)
