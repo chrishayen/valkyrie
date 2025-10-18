@@ -334,78 +334,25 @@ drain_response_queue :: proc(epoll_fd: linux.Fd) {
 
 main :: proc() {
 	// Parse command-line arguments
-	host := "0.0.0.0"
-	port := 8080
-	max_connections := 1024
-	enable_tls := false
-	cert_path := "dev.crt"
-	key_path := "dev.key"
-	num_workers := DEFAULT_NUM_WORKERS
+	args := parse_args()
 
-	args := os.args[1:]
-	for i := 0; i < len(args); i += 1 {
-		arg := args[i]
-
-		switch arg {
-		case "-h", "--host":
-			if i + 1 < len(args) {
-				i += 1
-				host = args[i]
-			}
-		case "-p", "--port":
-			if i + 1 < len(args) {
-				i += 1
-				port_val, ok := strconv.parse_int(args[i])
-				if ok {
-					port = port_val
-				}
-			}
-		case "-m", "--max-connections":
-			if i + 1 < len(args) {
-				i += 1
-				max_val, ok := strconv.parse_int(args[i])
-				if ok {
-					max_connections = max_val
-				}
-			}
-		case "-w", "--workers":
-			if i + 1 < len(args) {
-				i += 1
-				workers_val, ok := strconv.parse_int(args[i])
-				if ok {
-					num_workers = workers_val
-				}
-			}
-		case "--tls":
-			enable_tls = true
-		case "--cert":
-			if i + 1 < len(args) {
-				i += 1
-				cert_path = args[i]
-			}
-		case "--key":
-			if i + 1 < len(args) {
-				i += 1
-				key_path = args[i]
-			}
-		case "--help":
-			print_usage()
-			return
-		}
+	if args.show_help {
+		print_usage()
+		return
 	}
 
 	// Setup signal handler
 	signal(SIGPIPE, SIG_IGN)
 
 	// Initialize TLS if enabled
-	if enable_tls {
-		ctx, ok := tls_init(cert_path, key_path)
+	if args.enable_tls {
+		ctx, ok := tls_init(args.cert_path, args.key_path)
 		if !ok {
 			fmt.eprintln("Failed to initialize TLS")
 			return
 		}
 		tls_ctx = ctx
-		fmt.printfln("TLS initialized (cert: %s, key: %s)", cert_path, key_path)
+		fmt.printfln("TLS initialized (cert: %s, key: %s)", args.cert_path, args.key_path)
 	}
 
 	// Initialize queues
@@ -417,8 +364,8 @@ main :: proc() {
 	conn_metadata = make(map[linux.Fd]Connection_Metadata)
 
 	// Start worker threads
-	workers = make([dynamic]^thread.Thread, num_workers)
-	for i in 0 ..< num_workers {
+	workers = make([dynamic]^thread.Thread, args.num_workers)
+	for i in 0 ..< args.num_workers {
 		workers[i] = thread.create_and_start(worker_thread_proc)
 	}
 
@@ -471,13 +418,13 @@ main :: proc() {
 	// Bind to address
 	addr: linux.Sock_Addr_In
 	addr.sin_family = .INET
-	addr.sin_port = u16be(port)
+	addr.sin_port = u16be(args.port)
 	addr.sin_addr = {0, 0, 0, 0} // INADDR_ANY (0.0.0.0)
 
 	bind_err := linux.bind(listen_fd, &addr)
 	if bind_err != .NONE {
 		linux.close(listen_fd)
-		fmt.eprintfln("Failed to bind to %s:%d", host, port)
+		fmt.eprintfln("Failed to bind to %s:%d", args.host, args.port)
 		return
 	}
 
@@ -501,12 +448,12 @@ main :: proc() {
 		return
 	}
 
-	protocol := enable_tls ? "HTTPS" : "HTTP"
-	fmt.printfln("%s/2 server listening on %s:%d", protocol, host, port)
-	fmt.printfln("Max connections: %d", max_connections)
-	fmt.printfln("Worker threads: %d", num_workers)
-	if enable_tls {
-		fmt.printfln("TLS enabled (cert: %s, key: %s)", cert_path, key_path)
+	protocol := args.enable_tls ? "HTTPS" : "HTTP"
+	fmt.printfln("%s/2 server listening on %s:%d", protocol, args.host, args.port)
+	fmt.printfln("Max connections: %d", args.max_connections)
+	fmt.printfln("Worker threads: %d", args.num_workers)
+	if args.enable_tls {
+		fmt.printfln("TLS enabled (cert: %s, key: %s)", args.cert_path, args.key_path)
 	}
 	fmt.println("Press Ctrl+C to stop...")
 
@@ -575,12 +522,12 @@ main :: proc() {
 
 				// Create connection metadata
 				metadata := Connection_Metadata {
-					is_tls          = enable_tls,
-					handshake_state = enable_tls ? .Handshaking : .Ready,
+					is_tls          = args.enable_tls,
+					handshake_state = args.enable_tls ? .Handshaking : .Ready,
 				}
 
 				// Create TLS connection if enabled
-				if enable_tls {
+				if args.enable_tls {
 					if ctx, ok := tls_ctx.?; ok {
 						tls_conn, tls_ok := tls_connection_new(&ctx, c.int(client_fd))
 						if !tls_ok {
@@ -598,7 +545,7 @@ main :: proc() {
 				sync.mutex_unlock(&conn_metadata_mutex)
 
 				// Create HTTP/2 protocol handler for this connection (only if not TLS or handshake will complete)
-				if !enable_tls {
+				if !args.enable_tls {
 					handler, handler_ok := http2.protocol_handler_init(true) // true = server
 					if !handler_ok {
 						linux.epoll_ctl(epoll_fd, .DEL, client_fd, nil)
