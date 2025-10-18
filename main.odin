@@ -8,6 +8,7 @@ import "core:strconv"
 import "core:thread"
 import "core:sync"
 import linux "core:sys/linux"
+import http2 "http2"
 
 // Signal handling
 foreign import libc "system:c"
@@ -46,6 +47,10 @@ io_to_worker_queue: MPSC_Queue(Work_Item)
 worker_to_io_queue: MPSC_Queue(Work_Item)
 workers: [dynamic]^thread.Thread
 wakeup_fd: linux.Fd  // eventfd for waking up I/O thread when responses are ready
+
+// HTTP/2 connection handlers (one per file descriptor)
+handlers: map[linux.Fd]http2.Protocol_Handler
+handlers_mutex: sync.Mutex
 
 // mpsc_queue_init initializes an MPSC queue
 mpsc_queue_init :: proc($T: typeid) -> MPSC_Queue(T) {
@@ -125,35 +130,69 @@ worker_thread_proc :: proc() {
 			break
 		}
 
-		// This is where we do the CPU-heavy frame processing and make responses
-		// Parse HTTP/2 frames, handle headers, process requests, generate responses
+		// Process HTTP/2 data
 		if work_item.len > 0 {
 			fmt.printfln("[WORKER] Processing %d bytes from fd=%d", work_item.len, work_item.fd)
+
+			// Get handler for this connection (thread-safe)
+			sync.mutex_lock(&handlers_mutex)
+			handler, found := handlers[work_item.fd]
+			sync.mutex_unlock(&handlers_mutex)
+
+			if !found {
+				fmt.printfln("[WORKER] No handler found for fd=%d, dropping data", work_item.fd)
+				delete(work_item.data)
+				continue
+			}
+
+			// Process incoming HTTP/2 data
+			handler_ptr := &handler
+			ok := http2.protocol_handler_process_data(handler_ptr, work_item.data)
 
 			// Free the incoming data
 			delete(work_item.data)
 
-			// Create HTTP/2 response with "hello world"
-			response := "hello world"
-			response_data := make([]u8, len(response))
-			copy(response_data, response)
-
-			fmt.printfln("[WORKER] Queueing response (%d bytes) for fd=%d", len(response_data), work_item.fd)
-
-			// Queue response back to IO
-			response_item := Work_Item{
-				fd = work_item.fd,
-				data = response_data,
-				len = len(response_data),
+			if !ok {
+				fmt.printfln("[WORKER] HTTP/2 processing failed for fd=%d", work_item.fd)
+				continue
 			}
-			mpsc_queue_push(&worker_to_io_queue, response_item)
 
-			// Wake up I/O thread
-			val: u64 = 1
-			linux.write(wakeup_fd, transmute([]u8)mem.ptr_to_bytes(&val))
-		} else {
-			// Connection notification (len == 0)
-			fmt.printfln("[WORKER] New connection notification for fd=%d", work_item.fd)
+			// Update handler in map after processing (it may have been modified)
+			sync.mutex_lock(&handlers_mutex)
+			handlers[work_item.fd] = handler_ptr^
+			sync.mutex_unlock(&handlers_mutex)
+
+			// Get response data if there's anything to write
+			response_data := http2.protocol_handler_get_write_data(handler_ptr)
+			if response_data != nil && len(response_data) > 0 {
+				fmt.printfln("[WORKER] Generated %d bytes response for fd=%d", len(response_data), work_item.fd)
+
+				// Make a copy of response data
+				response_copy := make([]u8, len(response_data))
+				copy(response_copy, response_data)
+
+				// Consume the write data from handler's buffer
+				http2.protocol_handler_consume_write_data(handler_ptr, len(response_data))
+
+				// Update handler in map after consuming write data
+				sync.mutex_lock(&handlers_mutex)
+				handlers[work_item.fd] = handler_ptr^
+				sync.mutex_unlock(&handlers_mutex)
+
+				// Queue response back to IO
+				response_item := Work_Item{
+					fd = work_item.fd,
+					data = response_copy,
+					len = len(response_copy),
+				}
+				mpsc_queue_push(&worker_to_io_queue, response_item)
+
+				// Wake up I/O thread
+				val: u64 = 1
+				linux.write(wakeup_fd, transmute([]u8)mem.ptr_to_bytes(&val))
+			} else {
+				fmt.printfln("[WORKER] No response data for fd=%d", work_item.fd)
+			}
 		}
 	}
 }
@@ -193,6 +232,14 @@ drain_response_queue :: proc(epoll_fd: linux.Fd) {
 				fmt.printfln("[IO] Write error %v on fd=%d, closing connection", write_err, work_item.fd)
 				linux.epoll_ctl(epoll_fd, .DEL, work_item.fd, nil)
 				linux.close(work_item.fd)
+
+				// Cleanup HTTP/2 handler (thread-safe)
+				sync.mutex_lock(&handlers_mutex)
+				if handler, found := handlers[work_item.fd]; found {
+					http2.protocol_handler_destroy(&handler)
+					delete_key(&handlers, work_item.fd)
+				}
+				sync.mutex_unlock(&handlers_mutex)
 			} else {
 				fmt.printfln("[IO] Wrote %d bytes to fd=%d", n_written, work_item.fd)
 			}
@@ -272,6 +319,9 @@ main :: proc() {
 	// Initialize queues
 	io_to_worker_queue = mpsc_queue_init(Work_Item)
 	worker_to_io_queue = mpsc_queue_init(Work_Item)
+
+	// Initialize handlers map
+	handlers = make(map[linux.Fd]http2.Protocol_Handler)
 
 	// Start worker threads
 	workers = make([dynamic]^thread.Thread, num_workers)
@@ -439,7 +489,22 @@ main :: proc() {
 				}
 
 				fmt.printfln("[IO] Added fd=%d to epoll with edge-triggered mode", client_fd)
-				enqueue_to_workers(client_fd, nil, 0)
+
+				// Create HTTP/2 protocol handler for this connection
+				handler, handler_ok := http2.protocol_handler_init(true)  // true = server
+				if !handler_ok {
+					fmt.printfln("[IO] Failed to create HTTP/2 handler for fd=%d", client_fd)
+					linux.epoll_ctl(epoll_fd, .DEL, client_fd, nil)
+					linux.close(client_fd)
+					continue
+				}
+
+				// Store handler in map (thread-safe)
+				sync.mutex_lock(&handlers_mutex)
+				handlers[client_fd] = handler
+				sync.mutex_unlock(&handlers_mutex)
+
+				fmt.printfln("[IO] Created HTTP/2 handler for fd=%d", client_fd)
 			} else {
 				// Client socket event - read fully to buffer
 				fmt.printfln("[IO] Read event on fd=%d", fd)
@@ -480,6 +545,14 @@ main :: proc() {
 					linux.epoll_ctl(epoll_fd, .DEL, fd, nil)
 					linux.close(fd)
 					delete(data_buf)
+
+					// Cleanup HTTP/2 handler (thread-safe)
+					sync.mutex_lock(&handlers_mutex)
+					if handler, found := handlers[fd]; found {
+						http2.protocol_handler_destroy(&handler)
+						delete_key(&handlers, fd)
+					}
+					sync.mutex_unlock(&handlers_mutex)
 				} else {
 					// EAGAIN with no data - just wait for more
 					fmt.printfln("[IO] No data yet on fd=%d (EAGAIN)", fd)
