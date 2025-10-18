@@ -9,7 +9,7 @@ build:
 	$(ODIN) build . -out:$(BUILD_DIR)/$(BINARY)
 
 dev:
-	odin run . -- --tls
+	odin run . -- --tls --port 8443
 
 test:
 	@$(ODIN) test tests -all-packages -define:ODIN_TEST_THREADS=2
