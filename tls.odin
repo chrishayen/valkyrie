@@ -1,31 +1,37 @@
 package http
 
+import "core:c"
 import "core:fmt"
 import "core:os"
 import "core:strings"
-import "core:c"
-import s2n "s2n"
 
 // TLS_Context holds s2n configuration
 TLS_Context :: struct {
-	config: ^s2n.s2n_config,
+	config: ^s2n_config,
 }
 
 // TLS_Connection wraps an s2n connection
 TLS_Connection :: struct {
-	s2n_conn: ^s2n.s2n_connection,
+	s2n_conn: ^s2n_connection,
 }
 
 // tls_init initializes the s2n library and creates a TLS context
-tls_init :: proc(cert_path: string, key_path: string, allocator := context.allocator) -> (ctx: TLS_Context, ok: bool) {
+tls_init :: proc(
+	cert_path: string,
+	key_path: string,
+	allocator := context.allocator,
+) -> (
+	ctx: TLS_Context,
+	ok: bool,
+) {
 	// Initialize s2n-tls
-	if s2n.s2n_init() != s2n.S2N_SUCCESS {
+	if s2n_init() != S2N_SUCCESS {
 		fmt.eprintln("Failed to initialize s2n-tls")
 		return {}, false
 	}
 
 	// Create config
-	config := s2n.s2n_config_new()
+	config := s2n_config_new()
 	if config == nil {
 		fmt.eprintln("Failed to create s2n config")
 		return {}, false
@@ -35,7 +41,7 @@ tls_init :: proc(cert_path: string, key_path: string, allocator := context.alloc
 	cert_data, cert_ok := os.read_entire_file(cert_path, allocator)
 	if !cert_ok {
 		fmt.eprintfln("Failed to read certificate file: %s", cert_path)
-		s2n.s2n_config_free(config)
+		s2n_config_free(config)
 		return {}, false
 	}
 	defer delete(cert_data, allocator)
@@ -43,7 +49,7 @@ tls_init :: proc(cert_path: string, key_path: string, allocator := context.alloc
 	key_data, key_ok := os.read_entire_file(key_path, allocator)
 	if !key_ok {
 		fmt.eprintfln("Failed to read key file: %s", key_path)
-		s2n.s2n_config_free(config)
+		s2n_config_free(config)
 		return {}, false
 	}
 	defer delete(key_data, allocator)
@@ -56,18 +62,18 @@ tls_init :: proc(cert_path: string, key_path: string, allocator := context.alloc
 	defer delete(key_cstr, allocator)
 
 	// Add certificate and key to config
-	if s2n.s2n_config_add_cert_chain_and_key(config, cert_cstr, key_cstr) != s2n.S2N_SUCCESS {
+	if s2n_config_add_cert_chain_and_key(config, cert_cstr, key_cstr) != S2N_SUCCESS {
 		fmt.eprintln("Failed to add certificate and key to s2n config")
-		s2n.s2n_config_free(config)
+		s2n_config_free(config)
 		return {}, false
 	}
 
 	// Set ALPN preferences for HTTP/2
 	protocols := [1]cstring{"h2"}
 	protocols_ptr := &protocols[0]
-	if s2n.s2n_config_set_protocol_preferences(config, protocols_ptr, 1) != s2n.S2N_SUCCESS {
+	if s2n_config_set_protocol_preferences(config, protocols_ptr, 1) != S2N_SUCCESS {
 		fmt.eprintln("Failed to set ALPN protocol preferences")
-		s2n.s2n_config_free(config)
+		s2n_config_free(config)
 		return {}, false
 	}
 
@@ -77,10 +83,10 @@ tls_init :: proc(cert_path: string, key_path: string, allocator := context.alloc
 // tls_destroy cleans up TLS context
 tls_destroy :: proc(ctx: ^TLS_Context) {
 	if ctx.config != nil {
-		s2n.s2n_config_free(ctx.config)
+		s2n_config_free(ctx.config)
 		ctx.config = nil
 	}
-	s2n.s2n_cleanup()
+	s2n_cleanup()
 }
 
 // tls_connection_new creates a new TLS connection for a file descriptor
@@ -90,23 +96,23 @@ tls_connection_new :: proc(ctx: ^TLS_Context, fd: c.int) -> (tls_conn: TLS_Conne
 	}
 
 	// Create s2n connection in server mode
-	s2n_conn := s2n.s2n_connection_new(s2n.s2n_mode.SERVER)
+	s2n_conn := s2n_connection_new(s2n_mode.SERVER)
 	if s2n_conn == nil {
 		fmt.eprintln("Failed to create s2n connection")
 		return {}, false
 	}
 
 	// Set config
-	if s2n.s2n_connection_set_config(s2n_conn, ctx.config) != s2n.S2N_SUCCESS {
+	if s2n_connection_set_config(s2n_conn, ctx.config) != S2N_SUCCESS {
 		fmt.eprintln("Failed to set config on connection")
-		s2n.s2n_connection_free(s2n_conn)
+		s2n_connection_free(s2n_conn)
 		return {}, false
 	}
 
 	// Set file descriptor
-	if s2n.s2n_connection_set_fd(s2n_conn, fd) != s2n.S2N_SUCCESS {
+	if s2n_connection_set_fd(s2n_conn, fd) != S2N_SUCCESS {
 		fmt.eprintln("Failed to set file descriptor on connection")
-		s2n.s2n_connection_free(s2n_conn)
+		s2n_connection_free(s2n_conn)
 		return {}, false
 	}
 
@@ -116,7 +122,7 @@ tls_connection_new :: proc(ctx: ^TLS_Context, fd: c.int) -> (tls_conn: TLS_Conne
 // tls_connection_free frees a TLS connection
 tls_connection_free :: proc(tls_conn: ^TLS_Connection) {
 	if tls_conn.s2n_conn != nil {
-		s2n.s2n_connection_free(tls_conn.s2n_conn)
+		s2n_connection_free(tls_conn.s2n_conn)
 		tls_conn.s2n_conn = nil
 	}
 }
@@ -135,10 +141,10 @@ tls_negotiate :: proc(tls_conn: ^TLS_Connection) -> TLS_Negotiate_Result {
 		return .Error
 	}
 
-	blocked: s2n.s2n_blocked_status
-	result := s2n.s2n_negotiate(tls_conn.s2n_conn, &blocked)
+	blocked: s2n_blocked_status
+	result := s2n_negotiate(tls_conn.s2n_conn, &blocked)
 
-	if result == s2n.S2N_SUCCESS {
+	if result == S2N_SUCCESS {
 		return .Success
 	}
 
@@ -157,12 +163,17 @@ tls_send :: proc(tls_conn: ^TLS_Connection, data: []byte) -> int {
 		return 0
 	}
 
-	blocked: s2n.s2n_blocked_status
+	blocked: s2n_blocked_status
 	total_sent := 0
 
 	for total_sent < len(data) {
 		remaining := data[total_sent:]
-		sent := s2n.s2n_send(tls_conn.s2n_conn, raw_data(remaining), c.ssize_t(len(remaining)), &blocked)
+		sent := s2n_send(
+			tls_conn.s2n_conn,
+			raw_data(remaining),
+			c.ssize_t(len(remaining)),
+			&blocked,
+		)
 
 		if sent > 0 {
 			total_sent += int(sent)
@@ -189,8 +200,8 @@ tls_recv :: proc(tls_conn: ^TLS_Connection, buffer: []byte) -> int {
 		return 0
 	}
 
-	blocked: s2n.s2n_blocked_status
-	received := s2n.s2n_recv(tls_conn.s2n_conn, raw_data(buffer), c.ssize_t(len(buffer)), &blocked)
+	blocked: s2n_blocked_status
+	received := s2n_recv(tls_conn.s2n_conn, raw_data(buffer), c.ssize_t(len(buffer)), &blocked)
 
 	if received > 0 {
 		return int(received)
@@ -214,6 +225,7 @@ tls_shutdown :: proc(tls_conn: ^TLS_Connection) {
 		return
 	}
 
-	blocked: s2n.s2n_blocked_status
-	s2n.s2n_shutdown(tls_conn.s2n_conn, &blocked)
+	blocked: s2n_blocked_status
+	s2n_shutdown(tls_conn.s2n_conn, &blocked)
 }
+
