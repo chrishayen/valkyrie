@@ -338,8 +338,8 @@ main :: proc() {
 	port := 8080
 	max_connections := 1024
 	enable_tls := false
-	cert_path := "certs/server.crt"
-	key_path := "certs/server.key"
+	cert_path := "dev_server.crt"
+	key_path := "dev_server.key"
 	num_workers := DEFAULT_NUM_WORKERS
 
 	args := os.args[1:]
@@ -642,9 +642,9 @@ main :: proc() {
 							} else {
 								sync.mutex_lock(&handlers_mutex)
 								// Allocate handler entry
-							entry := new(Handler_Entry)
-							entry.handler = handler
-							handlers[fd] = entry
+								entry := new(Handler_Entry)
+								entry.handler = handler
+								handlers[fd] = entry
 								sync.mutex_unlock(&handlers_mutex)
 							}
 
