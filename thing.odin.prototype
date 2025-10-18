@@ -1,0 +1,310 @@
+package main
+
+import "core:c"
+import "core:fmt"
+import "core:thread"
+import "core:sync"
+import linux "core:sys/linux"
+
+NUM_WORKERS :: 4
+QUEUE_SIZE :: 4096
+
+Work_Item :: struct {
+	fd:   linux.Fd,
+	data: []u8,
+	len:  int,
+}
+
+MPSC_Queue :: struct($T: typeid) {
+	items:  [QUEUE_SIZE]T,
+	head:   int,
+	tail:   int,
+	mutex:  sync.Mutex,
+	cond:   sync.Cond,
+	closed: bool,
+}
+
+mpsc_queue_init :: proc($T: typeid) -> MPSC_Queue(T) {
+	return MPSC_Queue(T){
+		head = 0,
+		tail = 0,
+		closed = false,
+	}
+}
+
+mpsc_queue_is_full :: proc(queue: ^MPSC_Queue($T)) -> bool {
+	return (queue.tail + 1) % QUEUE_SIZE == queue.head
+}
+
+mpsc_queue_is_empty :: proc(queue: ^MPSC_Queue($T)) -> bool {
+	return queue.head == queue.tail
+}
+
+mpsc_queue_push :: proc(queue: ^MPSC_Queue($T), item: T) -> bool {
+	sync.mutex_lock(&queue.mutex)
+	defer sync.mutex_unlock(&queue.mutex)
+
+	if queue.closed {
+		return false
+	}
+
+	if mpsc_queue_is_full(queue) {
+		return false
+	}
+
+	queue.items[queue.tail] = item
+	queue.tail = (queue.tail + 1) % QUEUE_SIZE
+	sync.cond_signal(&queue.cond)
+	return true
+}
+
+mpsc_queue_pop :: proc(queue: ^MPSC_Queue($T)) -> (item: T, ok: bool) {
+	sync.mutex_lock(&queue.mutex)
+	defer sync.mutex_unlock(&queue.mutex)
+
+	for mpsc_queue_is_empty(queue) && !queue.closed {
+		sync.cond_wait(&queue.cond, &queue.mutex)
+	}
+
+	if mpsc_queue_is_empty(queue) {
+		return {}, false
+	}
+
+	item = queue.items[queue.head]
+	queue.head = (queue.head + 1) % QUEUE_SIZE
+	return item, true
+}
+
+// Two queues: IO -> Worker and Worker -> IO
+io_to_worker_queue: MPSC_Queue(Work_Item)
+worker_to_io_queue: MPSC_Queue(Work_Item)
+workers: [NUM_WORKERS]^thread.Thread
+
+worker_thread_proc :: proc() {
+	for {
+		work_item, ok := mpsc_queue_pop(&io_to_worker_queue)
+		if !ok {
+			break
+		}
+
+		// This is where we do the CPU-heavy frame processing and make responses
+		// Parse HTTP/2 frames, handle headers, process requests, generate responses
+		if work_item.len > 0 {
+			// Free the incoming data
+			delete(work_item.data)
+
+			// Create HTTP/2 response with "hello world"
+			response := "hello world"
+			response_data := make([]u8, len(response))
+			copy(response_data, response)
+
+			// Queue response back to IO
+			response_item := Work_Item{
+				fd = work_item.fd,
+				data = response_data,
+				len = len(response_data),
+			}
+			mpsc_queue_push(&worker_to_io_queue, response_item)
+		} else {
+			// Connection notification (len == 0)
+			// Just echo it back
+			mpsc_queue_push(&worker_to_io_queue, work_item)
+		}
+	}
+}
+
+enqueue_to_workers :: proc(client_fd: linux.Fd, data: []u8, len: int) {
+	work_item := Work_Item{
+		fd = client_fd,
+		data = data,
+		len = len,
+	}
+	if !mpsc_queue_push(&io_to_worker_queue, work_item) {
+		// Queue is full, drop the work
+		delete(data)
+	}
+}
+
+mpsc_queue_try_pop :: proc(queue: ^MPSC_Queue($T)) -> (item: T, ok: bool) {
+	sync.mutex_lock(&queue.mutex)
+	defer sync.mutex_unlock(&queue.mutex)
+
+	if mpsc_queue_is_empty(queue) {
+		return {}, false
+	}
+
+	item = queue.items[queue.head]
+	queue.head = (queue.head + 1) % QUEUE_SIZE
+	return item, true
+}
+
+drain_response_queue :: proc(epoll_fd: linux.Fd) {
+	for {
+		work_item, ok := mpsc_queue_try_pop(&worker_to_io_queue)
+		if !ok {
+			break
+		}
+
+		// Write response back to client
+		if work_item.len > 0 {
+			_, write_err := linux.write(work_item.fd, work_item.data[:work_item.len])
+			if write_err != .NONE {
+				// Write error - close connection
+				linux.epoll_ctl(epoll_fd, .DEL, work_item.fd, nil)
+				linux.close(work_item.fd)
+			}
+			delete(work_item.data)
+		}
+	}
+}
+
+main :: proc() {
+	// Initialize queues
+	io_to_worker_queue = mpsc_queue_init(Work_Item)
+	worker_to_io_queue = mpsc_queue_init(Work_Item)
+
+	// Start worker threads
+	for i in 0..<NUM_WORKERS {
+		workers[i] = thread.create_and_start(worker_thread_proc)
+	}
+
+	epoll_fd, epoll_err := linux.epoll_create1({.FDCLOEXEC})
+	if epoll_err != .NONE {
+		return
+	}
+
+	listen_fd, sock_err := linux.socket(.INET, .STREAM, {.CLOEXEC}, .TCP)
+	if sock_err != .NONE {
+		return
+	}
+
+	// Enable address reuse with SO_REUSEADDR
+	{
+		opt_val: c.int = 1
+		result := linux.setsockopt_sock(listen_fd, .SOCKET, .REUSEADDR, &opt_val)
+		if result != .NONE {
+			linux.close(listen_fd)
+			return
+		}
+	}
+
+	// Bind to 0.0.0.0:8080
+	addr: linux.Sock_Addr_In
+	addr.sin_family = .INET
+	addr.sin_port = u16be(8080)
+	addr.sin_addr = {0, 0, 0, 0} // INADDR_ANY (0.0.0.0)
+
+	bind_err := linux.bind(listen_fd, &addr)
+	if bind_err != .NONE {
+		linux.close(listen_fd)
+		return
+	}
+
+	// Start listening with backlog of 128
+	listen_err := linux.listen(listen_fd, 128)
+	if listen_err != .NONE {
+		linux.close(listen_fd)
+		return
+	}
+
+	// Add listen socket to epoll
+	event := linux.EPoll_Event {
+		events = {.IN},
+		data = linux.EPoll_Data{fd = listen_fd},
+	}
+	epoll_add_err := linux.epoll_ctl(epoll_fd, .ADD, listen_fd, &event)
+	if epoll_add_err != .NONE {
+		linux.close(listen_fd)
+		return
+	}
+
+	// Create events array
+	events: [128]linux.EPoll_Event
+
+	// Main event loop
+	for {
+		drain_response_queue(epoll_fd)
+
+		nfds, wait_err := linux.epoll_wait(epoll_fd, raw_data(events[:]), 128, -1)
+		if wait_err != .NONE {
+			continue
+		}
+
+		for i in 0 ..< nfds {
+			fd := events[i].data.fd
+
+			if fd == listen_fd {
+				fmt.println(events[i])
+
+				// Accept the client connection
+				client_addr: linux.Sock_Addr_In
+				client_fd, accept_err := linux.accept(listen_fd, &client_addr)
+				if accept_err != .NONE {
+					continue
+				}
+
+				// Set SO_REUSEADDR on client socket
+				{
+					opt_val: c.int = 1
+					result := linux.setsockopt_sock(client_fd, .SOCKET, .REUSEADDR, &opt_val)
+					if result != .NONE {
+						linux.close(client_fd)
+						continue
+					}
+				}
+
+				// Add client socket to epoll
+				client_event := linux.EPoll_Event {
+					events = {.IN, .ET},
+					data = linux.EPoll_Data{fd = client_fd},
+				}
+				epoll_ctl_err := linux.epoll_ctl(epoll_fd, .ADD, client_fd, &client_event)
+				if epoll_ctl_err != .NONE {
+					linux.close(client_fd)
+					continue
+				}
+
+				enqueue_to_workers(client_fd, nil, 0)
+			} else {
+				// Client socket event - read fully to buffer
+				temp_buf: [4096]u8
+				data_buf: [dynamic]u8
+				total: int
+				last_err: linux.Errno
+				for {
+					n_bytes, read_err := linux.read(fd, temp_buf[:])
+					if read_err != .NONE {
+						last_err = read_err
+						if read_err == .EAGAIN || read_err == .EWOULDBLOCK {
+							break
+						}
+						break
+					}
+
+					if n_bytes == 0 {
+						break
+					}
+
+					// Append to buffer
+					append(&data_buf, ..temp_buf[:n_bytes])
+					total += int(n_bytes)
+				}
+
+				if total > 0 {
+					enqueue_to_workers(fd, data_buf[:], total)
+				} else if total == 0 {
+					linux.epoll_ctl(epoll_fd, .DEL, fd, nil)
+					linux.close(fd)
+					delete(data_buf)
+				} else {
+					if last_err != .EAGAIN && last_err != .EWOULDBLOCK {
+						fmt.eprintln("read error:", last_err)
+						// Stay in epoll
+					}
+					delete(data_buf)
+				}
+			}
+		}
+	}
+}
+
