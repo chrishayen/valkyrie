@@ -172,7 +172,18 @@ worker_thread_proc :: proc() {
 			delete(work_item.data)
 
 			if !ok {
-				fmt.printfln("[WORKER] HTTP/2 processing failed for fd=%d", work_item.fd)
+				fmt.printfln("[WORKER] HTTP/2 processing failed for fd=%d, connection will be closed", work_item.fd)
+				// Queue a zero-length item to signal connection should be closed
+				close_item := Work_Item{
+					fd = work_item.fd,
+					data = nil,
+					len = -1,  // Special marker for "close connection"
+				}
+				mpsc_queue_push(&worker_to_io_queue, close_item)
+
+				// Wake up I/O thread
+				val: u64 = 1
+				linux.write(wakeup_fd, transmute([]u8)mem.ptr_to_bytes(&val))
 				continue
 			}
 
@@ -241,6 +252,34 @@ drain_response_queue :: proc(epoll_fd: linux.Fd) {
 			break
 		}
 		count += 1
+
+		// Check if this is a close signal
+		if work_item.len < 0 {
+			// Close the connection due to protocol error
+			fmt.printfln("[IO] Closing fd=%d due to HTTP/2 processing failure", work_item.fd)
+			linux.epoll_ctl(epoll_fd, .DEL, work_item.fd, nil)
+			linux.close(work_item.fd)
+
+			// Cleanup HTTP/2 handler (thread-safe)
+			sync.mutex_lock(&handlers_mutex)
+			if handler, found := handlers[work_item.fd]; found {
+				http2.protocol_handler_destroy(&handler)
+				delete_key(&handlers, work_item.fd)
+			}
+			sync.mutex_unlock(&handlers_mutex)
+
+			// Cleanup TLS connection (thread-safe)
+			sync.mutex_lock(&conn_metadata_mutex)
+			if metadata, found := conn_metadata[work_item.fd]; found {
+				if tls_conn, ok := metadata.tls_conn.?; ok {
+					tls_conn_mut := tls_conn
+					tls_connection_free(&tls_conn_mut)
+				}
+				delete_key(&conn_metadata, work_item.fd)
+			}
+			sync.mutex_unlock(&conn_metadata_mutex)
+			continue
+		}
 
 		// Write response back to client
 		if work_item.len > 0 {
