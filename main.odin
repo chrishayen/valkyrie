@@ -56,6 +56,12 @@ MPSC_Queue :: struct($T: typeid) {
 	closed: bool,
 }
 
+// Handler_Entry contains a protocol handler with its own mutex for per-connection locking
+Handler_Entry :: struct {
+	handler: http2.Protocol_Handler,
+	mutex:   sync.Mutex,
+}
+
 // Global queues and workers
 io_to_worker_queue: MPSC_Queue(Work_Item)
 worker_to_io_queue: MPSC_Queue(Work_Item)
@@ -63,8 +69,8 @@ workers: [dynamic]^thread.Thread
 wakeup_fd: linux.Fd // eventfd for waking up I/O thread when responses are ready
 
 // HTTP/2 connection handlers (one per file descriptor)
-handlers: map[linux.Fd]http2.Protocol_Handler
-handlers_mutex: sync.Mutex
+handlers: map[linux.Fd]^Handler_Entry
+handlers_mutex: sync.Mutex // Only protects map operations, not handler access
 
 // TLS support
 tls_ctx: Maybe(TLS_Context) // Global TLS context (if TLS enabled)
@@ -147,9 +153,9 @@ worker_thread_proc :: proc() {
 
 		// Process HTTP/2 data
 		if work_item.len > 0 {
-			// Get handler for this connection (thread-safe)
+			// Get handler entry pointer from map (only lock for map access)
 			sync.mutex_lock(&handlers_mutex)
-			handler, found := handlers[work_item.fd]
+			entry, found := handlers[work_item.fd]
 			sync.mutex_unlock(&handlers_mutex)
 
 			if !found {
@@ -157,14 +163,19 @@ worker_thread_proc :: proc() {
 				continue
 			}
 
+			// Lock this specific handler for the entire processing duration
+			// This prevents concurrent access to the same connection's state
+			sync.mutex_lock(&entry.mutex)
+
 			// Process incoming HTTP/2 data
-			handler_ptr := &handler
-			ok := http2.protocol_handler_process_data(handler_ptr, work_item.data)
+			ok := http2.protocol_handler_process_data(&entry.handler, work_item.data)
 
 			// Free the incoming data
 			delete(work_item.data)
 
 			if !ok {
+				sync.mutex_unlock(&entry.mutex)
+
 				// Queue a zero-length item to signal connection should be closed
 				close_item := Work_Item {
 					fd   = work_item.fd,
@@ -179,25 +190,18 @@ worker_thread_proc :: proc() {
 				continue
 			}
 
-			// Update handler in map after processing (it may have been modified)
-			sync.mutex_lock(&handlers_mutex)
-			handlers[work_item.fd] = handler_ptr^
-			sync.mutex_unlock(&handlers_mutex)
-
 			// Get response data if there's anything to write
-			response_data := http2.protocol_handler_get_write_data(handler_ptr)
+			response_data := http2.protocol_handler_get_write_data(&entry.handler)
 			if response_data != nil && len(response_data) > 0 {
 				// Make a copy of response data
 				response_copy := make([]u8, len(response_data))
 				copy(response_copy, response_data)
 
 				// Consume the write data from handler's buffer
-				http2.protocol_handler_consume_write_data(handler_ptr, len(response_data))
+				http2.protocol_handler_consume_write_data(&entry.handler, len(response_data))
 
-				// Update handler in map after consuming write data
-				sync.mutex_lock(&handlers_mutex)
-				handlers[work_item.fd] = handler_ptr^
-				sync.mutex_unlock(&handlers_mutex)
+				// Unlock handler before queuing response
+				sync.mutex_unlock(&entry.mutex)
 
 				// Queue response back to IO
 				response_item := Work_Item {
@@ -210,6 +214,9 @@ worker_thread_proc :: proc() {
 				// Wake up I/O thread
 				val: u64 = 1
 				linux.write(wakeup_fd, transmute([]u8)mem.ptr_to_bytes(&val))
+			} else {
+				// No response data, just unlock
+				sync.mutex_unlock(&entry.mutex)
 			}
 		}
 	}
@@ -246,8 +253,9 @@ drain_response_queue :: proc(epoll_fd: linux.Fd) {
 
 			// Cleanup HTTP/2 handler (thread-safe)
 			sync.mutex_lock(&handlers_mutex)
-			if handler, found := handlers[work_item.fd]; found {
-				http2.protocol_handler_destroy(&handler)
+			if entry, found := handlers[work_item.fd]; found {
+				http2.protocol_handler_destroy(&entry.handler)
+				free(entry)
 				delete_key(&handlers, work_item.fd)
 			}
 			sync.mutex_unlock(&handlers_mutex)
@@ -301,8 +309,9 @@ drain_response_queue :: proc(epoll_fd: linux.Fd) {
 
 				// Cleanup HTTP/2 handler (thread-safe)
 				sync.mutex_lock(&handlers_mutex)
-				if handler, found := handlers[work_item.fd]; found {
-					http2.protocol_handler_destroy(&handler)
+				if entry, found := handlers[work_item.fd]; found {
+					http2.protocol_handler_destroy(&entry.handler)
+					free(entry)
 					delete_key(&handlers, work_item.fd)
 				}
 				sync.mutex_unlock(&handlers_mutex)
@@ -404,7 +413,7 @@ main :: proc() {
 	worker_to_io_queue = mpsc_queue_init(Work_Item)
 
 	// Initialize handlers and connection metadata maps
-	handlers = make(map[linux.Fd]http2.Protocol_Handler)
+	handlers = make(map[linux.Fd]^Handler_Entry)
 	conn_metadata = make(map[linux.Fd]Connection_Metadata)
 
 	// Start worker threads
@@ -599,7 +608,10 @@ main :: proc() {
 
 					// Store handler in map (thread-safe)
 					sync.mutex_lock(&handlers_mutex)
-					handlers[client_fd] = handler
+					// Allocate handler entry
+					entry := new(Handler_Entry)
+					entry.handler = handler
+					handlers[client_fd] = entry
 					sync.mutex_unlock(&handlers_mutex)
 				}
 			} else {
@@ -629,7 +641,10 @@ main :: proc() {
 								metadata.handshake_state = .Error
 							} else {
 								sync.mutex_lock(&handlers_mutex)
-								handlers[fd] = handler
+								// Allocate handler entry
+							entry := new(Handler_Entry)
+							entry.handler = handler
+							handlers[fd] = entry
 								sync.mutex_unlock(&handlers_mutex)
 							}
 
@@ -726,8 +741,9 @@ main :: proc() {
 
 					// Cleanup HTTP/2 handler (thread-safe)
 					sync.mutex_lock(&handlers_mutex)
-					if handler, found := handlers[fd]; found {
-						http2.protocol_handler_destroy(&handler)
+					if entry, found := handlers[fd]; found {
+						http2.protocol_handler_destroy(&entry.handler)
+						free(entry)
 						delete_key(&handlers, fd)
 					}
 					sync.mutex_unlock(&handlers_mutex)

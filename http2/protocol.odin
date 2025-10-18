@@ -9,9 +9,9 @@ Protocol_Handler :: struct {
 	conn:            HTTP2_Connection,
 	encoder:         hpack.Encoder_Context,
 	decoder:         hpack.Decoder_Context,
-	read_buffer:     [dynamic]byte,  // Buffer for incoming data
-	write_buffer:    [dynamic]byte,  // Buffer for outgoing data
-	preface_offset:  int,             // Bytes of preface received so far
+	read_buffer:     Ring_Buffer,       // Ring buffer for incoming data
+	write_buffer:    [dynamic]byte,     // Buffer for outgoing data
+	preface_offset:  int,                // Bytes of preface received so far
 	allocator:       runtime.Allocator,
 }
 
@@ -35,7 +35,14 @@ protocol_handler_init :: proc(is_server: bool, allocator := context.allocator) -
 		return {}, false
 	}
 
-	read_buffer := make([dynamic]byte, 0, 4096, allocator)
+	read_buffer, read_buffer_ok := buffer_init(16384, allocator)  // 16KB ring buffer
+	if !read_buffer_ok {
+		hpack.decoder_destroy(&decoder)
+		hpack.encoder_destroy(&encoder)
+		connection_destroy(&conn)
+		return {}, false
+	}
+
 	write_buffer := make([dynamic]byte, 0, 4096, allocator)
 
 	return Protocol_Handler{
@@ -58,7 +65,7 @@ protocol_handler_destroy :: proc(handler: ^Protocol_Handler) {
 	connection_destroy(&handler.conn)
 	hpack.encoder_destroy(&handler.encoder)
 	hpack.decoder_destroy(&handler.decoder)
-	delete(handler.read_buffer)
+	buffer_destroy(&handler.read_buffer)
 	delete(handler.write_buffer)
 }
 
@@ -68,8 +75,12 @@ protocol_handler_process_data :: proc(handler: ^Protocol_Handler, data: []byte) 
 		return false
 	}
 
-	// Append to read buffer
-	append(&handler.read_buffer, ..data)
+	// Write to ring buffer
+	bytes_written := buffer_write(&handler.read_buffer, data)
+	if bytes_written < len(data) {
+		// Buffer full - this shouldn't happen with proper flow control
+		fmt.eprintfln("[HTTP/2] Warning: ring buffer full, wrote %d/%d bytes", bytes_written, len(data))
+	}
 
 	// Try to process what we have
 	return protocol_handler_process_buffer(handler)
@@ -83,50 +94,62 @@ protocol_handler_process_buffer :: proc(handler: ^Protocol_Handler) -> bool {
 
 	// Handle preface if we're waiting for it
 	if handler.conn.state == .Waiting_Preface {
-		if len(handler.read_buffer) < CONNECTION_PREFACE_LENGTH {
+		if buffer_available_read(&handler.read_buffer) < CONNECTION_PREFACE_LENGTH {
 			// Need more data
 			return true
 		}
 
+		// Peek at preface data without consuming
+		preface_buf := make([]byte, CONNECTION_PREFACE_LENGTH, handler.allocator)
+		defer delete(preface_buf)
+		buffer_peek(&handler.read_buffer, preface_buf)
+
 		// Validate preface
-		err := connection_handle_preface(&handler.conn, handler.read_buffer[:CONNECTION_PREFACE_LENGTH])
+		err := connection_handle_preface(&handler.conn, preface_buf)
 		if err != .None {
 			return false
 		}
 
-		// Remove preface from buffer
-		copy(handler.read_buffer[:], handler.read_buffer[CONNECTION_PREFACE_LENGTH:])
-		resize(&handler.read_buffer, len(handler.read_buffer) - CONNECTION_PREFACE_LENGTH)
+		// Consume preface from buffer
+		buffer_consume(&handler.read_buffer, CONNECTION_PREFACE_LENGTH)
 
 		// Send server's SETTINGS frame now that preface is validated
 		protocol_handler_send_initial_settings(handler)
 	}
 
 	// Process frames
-	for len(handler.read_buffer) >= FRAME_HEADER_SIZE {
+	for buffer_available_read(&handler.read_buffer) >= FRAME_HEADER_SIZE {
+		// Peek at frame header
+		header_buf := make([]byte, FRAME_HEADER_SIZE, handler.allocator)
+		defer delete(header_buf)
+		buffer_peek(&handler.read_buffer, header_buf)
+
 		// Parse frame header
-		frame_header, _, parse_err := parse_frame_header(handler.read_buffer[:FRAME_HEADER_SIZE])
+		frame_header, _, parse_err := parse_frame_header(header_buf)
 		if parse_err != .None {
 			return false
 		}
 
 		// Check if we have the full frame
 		frame_size := int(frame_header.length) + FRAME_HEADER_SIZE
-		if len(handler.read_buffer) < frame_size {
+		if buffer_available_read(&handler.read_buffer) < frame_size {
 			// Need more data
 			return true
 		}
 
+		// Peek at full frame data
+		frame_data := make([]byte, frame_size, handler.allocator)
+		defer delete(frame_data)
+		buffer_peek(&handler.read_buffer, frame_data)
+
 		// Process the frame
-		frame_data := handler.read_buffer[:frame_size]
 		ok := protocol_handler_process_frame(handler, frame_data)
 		if !ok {
 			return false
 		}
 
-		// Remove frame from buffer
-		copy(handler.read_buffer[:], handler.read_buffer[frame_size:])
-		resize(&handler.read_buffer, len(handler.read_buffer) - frame_size)
+		// Consume frame from buffer
+		buffer_consume(&handler.read_buffer, frame_size)
 	}
 
 	return true
