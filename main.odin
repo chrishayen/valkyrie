@@ -338,8 +338,8 @@ main :: proc() {
 	port := 8080
 	max_connections := 1024
 	enable_tls := false
-	cert_path := "dev_server.crt"
-	key_path := "dev_server.key"
+	cert_path := "dev.crt"
+	key_path := "dev.key"
 	num_workers := DEFAULT_NUM_WORKERS
 
 	args := os.args[1:]
