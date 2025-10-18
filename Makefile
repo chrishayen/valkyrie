@@ -1,4 +1,4 @@
-.PHONY: build test install clean
+.PHONY: build test install clean dev run-tls
 
 ODIN := odin
 BUILD_DIR := build
@@ -9,7 +9,10 @@ build:
 	$(ODIN) build . -out:$(BUILD_DIR)/$(BINARY)
 
 dev:
-	odin run . -- --tls --port 8443
+	odin run . -- --tls --port 8443 --cert dev.crt --key dev.key
+
+run-tls: build
+	$(BUILD_DIR)/$(BINARY) --tls --port 8443 --cert dev.crt --key dev.key
 
 test:
 	@$(ODIN) test tests -all-packages -define:ODIN_TEST_THREADS=2

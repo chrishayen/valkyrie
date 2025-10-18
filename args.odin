@@ -23,8 +23,8 @@ parse_args :: proc() -> Server_Args {
 		port            = 8080,
 		max_connections = 1024,
 		enable_tls      = false,
-		cert_path       = "dev.crt",
-		key_path        = "dev.key",
+		cert_path       = "",
+		key_path        = "",
 		num_workers     = DEFAULT_NUM_WORKERS,
 		show_help       = false,
 	}
