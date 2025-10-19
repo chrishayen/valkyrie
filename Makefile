@@ -1,8 +1,9 @@
-.PHONY: build test install clean dev run-tls
+.PHONY: build test install clean dev run-tls benchmark
 
 ODIN := odin
 BUILD_DIR := build
 BINARY := http2_server
+BENCHMARK_BINARY := benchmark_mechanics
 
 build:
 	@mkdir -p $(BUILD_DIR)
@@ -16,6 +17,21 @@ run-tls: build
 
 test:
 	@$(ODIN) test tests -all-packages -define:ODIN_TEST_THREADS=2
+
+benchmark:
+	@mkdir -p $(BUILD_DIR)
+	@$(ODIN) build benchmarks/processor/benchmark_mechanics.odin -file -out:$(BUILD_DIR)/$(BENCHMARK_BINARY) -o:speed
+	@$(BUILD_DIR)/$(BENCHMARK_BINARY)
+
+benchmark-compare:
+	@mkdir -p $(BUILD_DIR)
+	@$(ODIN) build benchmarks/processor/benchmark_comparison.odin -file -out:$(BUILD_DIR)/benchmark_comparison -o:speed
+	@$(BUILD_DIR)/benchmark_comparison
+
+benchmark-hpack:
+	@mkdir -p $(BUILD_DIR)
+	@$(ODIN) build benchmarks/hpack/benchmark_hpack.odin -file -out:$(BUILD_DIR)/benchmark_hpack -o:speed
+	@$(BUILD_DIR)/benchmark_hpack
 
 install: build
 	@cp $(BUILD_DIR)/$(BINARY) ~/bin/ 2>/dev/null || cp $(BUILD_DIR)/$(BINARY) /usr/local/bin/
