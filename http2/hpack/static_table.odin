@@ -90,6 +90,8 @@ static_table_lookup :: proc(index: int) -> (entry: Static_Table_Entry, ok: bool)
 // static_table_find_exact searches for an exact match of both name and value.
 // Returns the 1-based index if found, 0 otherwise.
 static_table_find_exact :: proc(name: string, value: string) -> int {
+	// Linear search is faster than hash map for small table (61 entries)
+	// due to cache locality and no allocation overhead
 	for entry, i in STATIC_TABLE {
 		if entry.name == name && entry.value == value {
 			return i + 1
@@ -101,6 +103,7 @@ static_table_find_exact :: proc(name: string, value: string) -> int {
 // static_table_find_name searches for a name match (value may be empty).
 // Returns the 1-based index of the first match, 0 otherwise.
 static_table_find_name :: proc(name: string) -> int {
+	// Linear search is faster than hash map for small table (61 entries)
 	for entry, i in STATIC_TABLE {
 		if entry.name == name {
 			return i + 1

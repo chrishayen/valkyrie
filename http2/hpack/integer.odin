@@ -61,6 +61,9 @@ integer_encode :: proc(prefix_bits: u8, prefix_value: u8, value: int, allocator 
 	return result[:], true
 }
 
+// Maximum allowed integer value to prevent DoS attacks
+MAX_INTEGER_VALUE :: 1 << 30  // ~1 billion, reasonable limit for HPACK integers
+
 // integer_decode decodes a variable-length integer from RFC 7541 Section 5.1.
 // input: the bytes to decode
 // prefix_bits: number of bits in the first byte that contain the integer (1-8)
@@ -98,12 +101,19 @@ integer_decode :: proc(input: []byte, prefix_bits: u8) -> (value: int, bytes_con
 		b := input[bytes_consumed]
 		bytes_consumed += 1
 
-		// Add lower 7 bits
-		value += int(b & 0x7F) * multiplier
+		// Calculate the addition value
+		add_value := int(b & 0x7F) * multiplier
 
-		// Check for integer overflow
-		if value < 0 {
-			// Overflow occurred
+		// Check for overflow before addition
+		if add_value < 0 || value > MAX_INTEGER_VALUE - add_value {
+			// Overflow would occur
+			return 0, 0, false
+		}
+
+		value += add_value
+
+		// Additional safety check
+		if value > MAX_INTEGER_VALUE {
 			return 0, 0, false
 		}
 
@@ -111,6 +121,11 @@ integer_decode :: proc(input: []byte, prefix_bits: u8) -> (value: int, bytes_con
 		if (b & 0x80) == 0 {
 			// No continuation bit, we're done
 			return value, bytes_consumed, true
+		}
+
+		// Check for multiplier overflow before multiplication
+		if multiplier > MAX_INTEGER_VALUE / 128 {
+			return 0, 0, false
 		}
 
 		multiplier *= 128

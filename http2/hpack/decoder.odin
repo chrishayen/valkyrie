@@ -1,12 +1,12 @@
 package hpack
 
 import "base:runtime"
-import "core:fmt"
 
 // Decoder_Context maintains the decoding state including the dynamic table
 Decoder_Context :: struct {
 	dynamic_table:   Dynamic_Table,
 	max_header_size: int, // Maximum total size of decoded headers (prevents DoS)
+	huffman_tree:    ^Huffman_Decode_Node, // Cached Huffman decode tree
 	allocator:       runtime.Allocator,
 }
 
@@ -34,9 +34,17 @@ decoder_init :: proc(
 		return {}, false
 	}
 
+	// Build Huffman decode tree once and cache it
+	huffman_tree, tree_ok := huffman_decode_tree_build(allocator)
+	if !tree_ok {
+		dynamic_table_destroy(&table)
+		return {}, false
+	}
+
 	return Decoder_Context {
 			dynamic_table = table,
 			max_header_size = max_header_size,
+			huffman_tree = huffman_tree,
 			allocator = allocator,
 		},
 		true
@@ -49,6 +57,7 @@ decoder_destroy :: proc(ctx: ^Decoder_Context) {
 	}
 
 	dynamic_table_destroy(&ctx.dynamic_table)
+	huffman_decode_tree_destroy(ctx.huffman_tree, ctx.allocator)
 }
 
 // decoder_decode_headers decodes HPACK-encoded headers
@@ -178,7 +187,7 @@ decode_indexed_field :: proc(
 		name = entry.name
 		value = entry.value
 	} else {
-		// Dynamic table (indices start at 62)
+		// Dynamic table
 		dynamic_index := index - 62
 		entry: Dynamic_Table_Entry
 		entry, found = dynamic_table_lookup(&ctx.dynamic_table, dynamic_index)
@@ -232,7 +241,7 @@ decode_literal_incremental :: proc(
 	name: string
 	if name_index == 0 {
 		// New name - decode string
-		decoded_name, string_consumed, string_err := decode_string(input[offset:], allocator)
+		decoded_name, string_consumed, string_err := decode_string(input[offset:], ctx.huffman_tree, allocator)
 		if string_err != .None {
 			return {}, 0, string_err
 		}
@@ -255,7 +264,7 @@ decode_literal_incremental :: proc(
 	}
 
 	// Decode value string
-	value, value_consumed, value_err := decode_string(input[offset:], allocator)
+	value, value_consumed, value_err := decode_string(input[offset:], ctx.huffman_tree, allocator)
 	if value_err != .None {
 		delete(name, allocator)
 		return {}, 0, value_err
@@ -292,7 +301,7 @@ decode_literal_without_indexing :: proc(
 	name: string
 	if name_index == 0 {
 		// New name
-		decoded_name, string_consumed, string_err := decode_string(input[offset:], allocator)
+		decoded_name, string_consumed, string_err := decode_string(input[offset:], ctx.huffman_tree, allocator)
 		if string_err != .None {
 			return {}, 0, string_err
 		}
@@ -314,7 +323,7 @@ decode_literal_without_indexing :: proc(
 	}
 
 	// Decode value string
-	value, value_consumed, value_err := decode_string(input[offset:], allocator)
+	value, value_consumed, value_err := decode_string(input[offset:], ctx.huffman_tree, allocator)
 	if value_err != .None {
 		delete(name, allocator)
 		return {}, 0, value_err
@@ -348,7 +357,7 @@ decode_literal_never_indexed :: proc(
 	name: string
 	if name_index == 0 {
 		// New name
-		decoded_name, string_consumed, string_err := decode_string(input[offset:], allocator)
+		decoded_name, string_consumed, string_err := decode_string(input[offset:], ctx.huffman_tree, allocator)
 		if string_err != .None {
 			return {}, 0, string_err
 		}
@@ -370,7 +379,7 @@ decode_literal_never_indexed :: proc(
 	}
 
 	// Decode value string
-	value, value_consumed, value_err := decode_string(input[offset:], allocator)
+	value, value_consumed, value_err := decode_string(input[offset:], ctx.huffman_tree, allocator)
 	if value_err != .None {
 		delete(name, allocator)
 		return {}, 0, value_err
@@ -409,6 +418,7 @@ decode_table_size_update :: proc(
 // decode_string decodes a string literal (RFC 7541 Section 5.2)
 decode_string :: proc(
 	input: []byte,
+	huffman_tree: ^Huffman_Decode_Node,
 	allocator := context.allocator,
 ) -> (
 	output: string,
@@ -439,15 +449,12 @@ decode_string :: proc(
 	string_data := input[offset:offset + length]
 
 	if is_huffman {
-		// Huffman decode
-		tree, tree_ok := huffman_decode_tree_build(allocator)
-		defer huffman_decode_tree_destroy(tree, allocator)
-
-		if !tree_ok {
+		// Huffman decode using cached tree
+		if huffman_tree == nil {
 			return "", 0, .Invalid_String
 		}
 
-		decoded, decode_ok := huffman_decode(string_data, tree, allocator)
+		decoded, decode_ok := huffman_decode(string_data, huffman_tree, allocator)
 		if !decode_ok {
 			return "", 0, .Invalid_String
 		}
