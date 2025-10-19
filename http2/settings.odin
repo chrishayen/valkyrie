@@ -191,6 +191,14 @@ settings_get_remote_window_size :: proc(ctx: ^Settings_Context) -> u32 {
 	return ctx.remote_initial_window_size
 }
 
+// settings_get_local_max_frame_size returns the maximum frame size we will accept
+settings_get_local_max_frame_size :: proc(ctx: ^Settings_Context) -> u32 {
+	if ctx == nil {
+		return 16384
+	}
+	return ctx.local_max_frame_size
+}
+
 // settings_get_remote_max_frame_size returns the maximum frame size peer will accept
 settings_get_remote_max_frame_size :: proc(ctx: ^Settings_Context) -> u32 {
 	if ctx == nil {

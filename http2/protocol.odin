@@ -130,6 +130,17 @@ protocol_handler_process_buffer :: proc(handler: ^Protocol_Handler) -> bool {
 			return false
 		}
 
+		// Validate frame size against our local MAX_FRAME_SIZE (what we told peer they can send)
+		// Note: SETTINGS frames are exempt from size validation per RFC
+		if frame_header.type != .SETTINGS {
+			max_frame_size := settings_get_local_max_frame_size(&handler.conn.settings)
+			if frame_header.length > max_frame_size {
+				fmt.eprintfln("[HTTP/2] Frame size %d exceeds MAX_FRAME_SIZE %d", frame_header.length, max_frame_size)
+				protocol_handler_send_goaway(handler, .FRAME_SIZE_ERROR)
+				return false
+			}
+		}
+
 		// Check if we have the full frame
 		frame_size := int(frame_header.length) + FRAME_HEADER_SIZE
 		if buffer_available_read(&handler.read_buffer) < frame_size {
@@ -181,7 +192,7 @@ protocol_handler_process_frame :: proc(handler: ^Protocol_Handler, frame_data: [
 	case .WINDOW_UPDATE:
 		return protocol_handler_handle_window_update(handler, &header, payload)
 	case .RST_STREAM:
-		return true
+		return protocol_handler_handle_rst_stream(handler, &header, payload)
 	case .GOAWAY:
 		return protocol_handler_handle_goaway(handler, &header, payload)
 	case .PRIORITY:
@@ -238,7 +249,9 @@ protocol_handler_handle_headers :: proc(handler: ^Protocol_Handler, header: ^Fra
 	// Parse HEADERS frame to extract header block
 	headers_frame, parse_err := parse_headers_frame(header^, payload)
 	if parse_err != .None {
-		return false
+		fmt.eprintfln("[HTTP/2] Failed to parse HEADERS frame: %v", parse_err)
+		protocol_handler_send_rst_stream(handler, header.stream_id, .PROTOCOL_ERROR)
+		return true
 	}
 
 	// Get or create stream
@@ -246,19 +259,30 @@ protocol_handler_handle_headers :: proc(handler: ^Protocol_Handler, header: ^Fra
 	if !found {
 		new_stream, err := connection_create_stream(&handler.conn, header.stream_id)
 		if err != .None {
-			return false
+			fmt.eprintfln("[HTTP/2] Failed to create stream %d: %v", header.stream_id, err)
+			protocol_handler_send_rst_stream(handler, header.stream_id, .REFUSED_STREAM)
+			return true
 		}
 		stream = new_stream
 	}
 
 	// Update stream state
 	end_stream := (header.flags & 0x01) != 0
-	stream_recv_headers(stream, end_stream)
+	stream_err := stream_recv_headers(stream, end_stream)
+	if stream_err != .None {
+		fmt.eprintfln("[HTTP/2] Stream error receiving HEADERS: %v", stream_err)
+		protocol_handler_send_rst_stream(handler, header.stream_id, .PROTOCOL_ERROR)
+		connection_remove_stream(&handler.conn, header.stream_id)
+		return true
+	}
 
 	// Decode headers from header block
 	req, ok := request_decode(&handler.decoder, headers_frame.header_block, handler.allocator)
 	if !ok {
-		return false
+		fmt.eprintln("[HTTP/2] Failed to decode HPACK headers")
+		protocol_handler_send_rst_stream(handler, header.stream_id, .COMPRESSION_ERROR)
+		connection_remove_stream(&handler.conn, header.stream_id)
+		return true
 	}
 
 	// Mark headers as complete
@@ -303,6 +327,7 @@ protocol_handler_handle_data :: proc(handler: ^Protocol_Handler, header: ^Frame_
 	// DATA frames must be associated with a stream
 	if header.stream_id == 0 {
 		fmt.eprintln("[HTTP/2] DATA frame on stream 0 is invalid")
+		protocol_handler_send_goaway(handler, .PROTOCOL_ERROR)
 		return false
 	}
 
@@ -310,20 +335,25 @@ protocol_handler_handle_data :: proc(handler: ^Protocol_Handler, header: ^Frame_
 	stream, found := connection_get_stream(&handler.conn, header.stream_id)
 	if !found {
 		fmt.eprintfln("[HTTP/2] DATA frame on non-existent stream %d", header.stream_id)
-		return false
+		protocol_handler_send_rst_stream(handler, header.stream_id, .STREAM_CLOSED)
+		return true  // Continue processing other frames
 	}
 
 	// Parse DATA frame
 	data_frame, parse_err := parse_data_frame(header^, payload)
 	if parse_err != .None {
 		fmt.eprintfln("[HTTP/2] Failed to parse DATA frame: %v", parse_err)
-		return false
+		protocol_handler_send_rst_stream(handler, header.stream_id, .PROTOCOL_ERROR)
+		connection_remove_stream(&handler.conn, header.stream_id)
+		return true
 	}
 
 	// Check stream state allows receiving data
 	if !stream_can_recv_data(stream) {
 		fmt.eprintfln("[HTTP/2] Stream %d cannot receive DATA in state %v", header.stream_id, stream.state)
-		return false
+		protocol_handler_send_rst_stream(handler, header.stream_id, .STREAM_CLOSED)
+		connection_remove_stream(&handler.conn, header.stream_id)
+		return true
 	}
 
 	data_len := len(data_frame.data)
@@ -332,6 +362,8 @@ protocol_handler_handle_data :: proc(handler: ^Protocol_Handler, header: ^Frame_
 	// Check connection-level flow control
 	if handler.conn.connection_window < i32(data_len) {
 		fmt.eprintfln("[HTTP/2] Connection flow control violation: need %d, have %d", data_len, handler.conn.connection_window)
+		// Connection-level flow control error - this is fatal
+		protocol_handler_send_goaway(handler, .FLOW_CONTROL_ERROR)
 		return false
 	}
 
@@ -339,13 +371,16 @@ protocol_handler_handle_data :: proc(handler: ^Protocol_Handler, header: ^Frame_
 	stream_err := stream_recv_data(stream, data_len, end_stream)
 	if stream_err != .None {
 		fmt.eprintfln("[HTTP/2] Stream error processing DATA: %v", stream_err)
-		return false
+		protocol_handler_send_rst_stream(handler, header.stream_id, .FLOW_CONTROL_ERROR)
+		connection_remove_stream(&handler.conn, header.stream_id)
+		return true
 	}
 
 	// Consume connection-level window
 	conn_err := connection_consume_window(&handler.conn, i32(data_len))
 	if conn_err != .None {
 		fmt.eprintfln("[HTTP/2] Connection flow control error: %v", conn_err)
+		protocol_handler_send_goaway(handler, .FLOW_CONTROL_ERROR)
 		return false
 	}
 
@@ -439,6 +474,47 @@ protocol_handler_handle_window_update :: proc(handler: ^Protocol_Handler, header
 			return false
 		}
 	}
+
+	return true
+}
+
+// protocol_handler_handle_rst_stream processes a RST_STREAM frame
+protocol_handler_handle_rst_stream :: proc(handler: ^Protocol_Handler, header: ^Frame_Header, payload: []byte) -> bool {
+	if handler == nil {
+		return false
+	}
+
+	// RST_STREAM must be on a stream
+	if header.stream_id == 0 {
+		fmt.eprintln("[HTTP/2] RST_STREAM on stream 0 is invalid")
+		protocol_handler_send_goaway(handler, .PROTOCOL_ERROR)
+		return false
+	}
+
+	// Parse RST_STREAM frame
+	rst_frame, parse_err := parse_rst_stream_frame(header^, payload)
+	if parse_err != .None {
+		fmt.eprintfln("[HTTP/2] Failed to parse RST_STREAM frame: %v", parse_err)
+		return false
+	}
+
+	// Get stream
+	stream, found := connection_get_stream(&handler.conn, header.stream_id)
+	if !found {
+		// Stream already closed or never existed - this is okay
+		return true
+	}
+
+	// Process RST_STREAM on the stream
+	error_code := u32(rst_frame.error_code)
+	stream_err := stream_recv_rst(stream, error_code)
+	if stream_err != .None {
+		fmt.eprintfln("[HTTP/2] Stream error processing RST_STREAM: %v", stream_err)
+		return false
+	}
+
+	// Remove the closed stream
+	connection_remove_stream(&handler.conn, header.stream_id)
 
 	return true
 }
@@ -607,6 +683,83 @@ protocol_handler_send_window_update :: proc(handler: ^Protocol_Handler, stream_i
 		u8(increment_u32),
 	}
 	append(&handler.write_buffer, ..increment_bytes[:])
+}
+
+// protocol_handler_send_rst_stream sends a RST_STREAM frame
+protocol_handler_send_rst_stream :: proc(handler: ^Protocol_Handler, stream_id: u32, error_code: Error_Code) {
+	if handler == nil || stream_id == 0 {
+		return
+	}
+
+	header := Frame_Header{
+		length = 4,
+		type = .RST_STREAM,
+		flags = 0,
+		stream_id = stream_id,
+	}
+	protocol_handler_write_frame_header(handler, &header)
+
+	// Write error code (4 bytes, big-endian)
+	error_u32 := u32(error_code)
+	error_bytes := [4]u8{
+		u8(error_u32 >> 24),
+		u8(error_u32 >> 16),
+		u8(error_u32 >> 8),
+		u8(error_u32),
+	}
+	append(&handler.write_buffer, ..error_bytes[:])
+}
+
+// protocol_handler_send_goaway sends a GOAWAY frame
+protocol_handler_send_goaway :: proc(handler: ^Protocol_Handler, error_code: Error_Code, debug_data: []byte = nil) {
+	if handler == nil {
+		return
+	}
+
+	// Use last_stream_id from connection
+	last_stream_id := handler.conn.last_stream_id
+
+	// Calculate frame length
+	frame_length := u32(8)  // last_stream_id (4) + error_code (4)
+	if debug_data != nil {
+		frame_length += u32(len(debug_data))
+	}
+
+	header := Frame_Header{
+		length = frame_length,
+		type = .GOAWAY,
+		flags = 0,
+		stream_id = 0,  // GOAWAY is always on connection (stream 0)
+	}
+	protocol_handler_write_frame_header(handler, &header)
+
+	// Write last stream ID (4 bytes, big-endian, reserved bit cleared)
+	last_stream := last_stream_id & STREAM_ID_MASK
+	last_stream_bytes := [4]u8{
+		u8(last_stream >> 24),
+		u8(last_stream >> 16),
+		u8(last_stream >> 8),
+		u8(last_stream),
+	}
+	append(&handler.write_buffer, ..last_stream_bytes[:])
+
+	// Write error code (4 bytes, big-endian)
+	error_u32 := u32(error_code)
+	error_bytes := [4]u8{
+		u8(error_u32 >> 24),
+		u8(error_u32 >> 16),
+		u8(error_u32 >> 8),
+		u8(error_u32),
+	}
+	append(&handler.write_buffer, ..error_bytes[:])
+
+	// Write debug data if provided
+	if debug_data != nil && len(debug_data) > 0 {
+		append(&handler.write_buffer, ..debug_data)
+	}
+
+	// Mark connection as going away
+	connection_send_goaway(&handler.conn, error_code)
 }
 
 // protocol_handler_replenish_windows checks and replenishes flow control windows
