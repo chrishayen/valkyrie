@@ -180,6 +180,21 @@ protocol_handler_process_frame :: proc(handler: ^Protocol_Handler, frame_data: [
 	}
 	payload := frame_data[FRAME_HEADER_SIZE:]
 
+	// RFC 9113 Section 6.10: If expecting CONTINUATION, reject all other frames
+	if handler.conn.continuation_expected {
+		if header.type != .CONTINUATION {
+			fmt.eprintfln("[HTTP/2] Expected CONTINUATION frame, got %v", header.type)
+			protocol_handler_send_goaway(handler, .PROTOCOL_ERROR)
+			return false
+		}
+		if header.stream_id != handler.conn.continuation_stream_id {
+			fmt.eprintfln("[HTTP/2] CONTINUATION on wrong stream: expected %d, got %d",
+				handler.conn.continuation_stream_id, header.stream_id)
+			protocol_handler_send_goaway(handler, .PROTOCOL_ERROR)
+			return false
+		}
+	}
+
 	#partial switch header.type {
 	case .SETTINGS:
 		return protocol_handler_handle_settings(handler, &header, payload)
@@ -199,9 +214,7 @@ protocol_handler_process_frame :: proc(handler: ^Protocol_Handler, frame_data: [
 		// PRIORITY frame - just ignore it
 		return true
 	case .CONTINUATION:
-		// CONTINUATION frame - not supported yet, but don't fail
-		fmt.eprintln("[HTTP/2] CONTINUATION frame not supported yet")
-		return true
+		return protocol_handler_handle_continuation(handler, &header, payload)
 	case:
 		return true
 	}
@@ -268,6 +281,7 @@ protocol_handler_handle_headers :: proc(handler: ^Protocol_Handler, header: ^Fra
 
 	// Update stream state
 	end_stream := (header.flags & 0x01) != 0
+	end_headers := (header.flags & 0x04) != 0
 	stream_err := stream_recv_headers(stream, end_stream)
 	if stream_err != .None {
 		fmt.eprintfln("[HTTP/2] Stream error receiving HEADERS: %v", stream_err)
@@ -276,7 +290,24 @@ protocol_handler_handle_headers :: proc(handler: ^Protocol_Handler, header: ^Fra
 		return true
 	}
 
-	// Decode headers from header block
+	// If END_HEADERS is not set, we're expecting CONTINUATION frames
+	if !end_headers {
+		// Start continuation sequence
+		handler.conn.continuation_expected = true
+		handler.conn.continuation_stream_id = header.stream_id
+		clear(&handler.conn.continuation_header_block)
+
+		// Append header block fragment
+		for b in headers_frame.header_block {
+			append(&handler.conn.continuation_header_block, b)
+		}
+
+		// Store END_STREAM flag for later processing
+		stream.recv_headers_complete = false
+		return true
+	}
+
+	// Complete header block received - decode it
 	req, ok := request_decode(&handler.decoder, headers_frame.header_block, handler.allocator)
 	if !ok {
 		fmt.eprintln("[HTTP/2] Failed to decode HPACK headers")
@@ -295,7 +326,13 @@ protocol_handler_handle_headers :: proc(handler: ^Protocol_Handler, header: ^Fra
 
 		// Handle request
 		resp := handle_request(&req, handler.allocator)
-		defer delete(resp.headers)
+		defer {
+			for h in resp.headers {
+				delete(h.value)
+			}
+			delete(resp.headers)
+			delete(resp.body)
+		}
 
 		// Send response
 		protocol_handler_send_response(handler, header.stream_id, &resp)
@@ -312,6 +349,105 @@ protocol_handler_handle_headers :: proc(handler: ^Protocol_Handler, header: ^Fra
 		// Copy header block for later
 		header_block_copy := make([]byte, len(headers_frame.header_block), handler.allocator)
 		copy(header_block_copy, headers_frame.header_block)
+		stream.recv_header_block = header_block_copy
+	}
+
+	return true
+}
+
+// protocol_handler_handle_continuation processes a CONTINUATION frame
+protocol_handler_handle_continuation :: proc(handler: ^Protocol_Handler, header: ^Frame_Header, payload: []byte) -> bool {
+	if handler == nil {
+		return false
+	}
+
+	// CONTINUATION frames must only appear during a continuation sequence
+	// (this is already validated in protocol_handler_process_frame)
+
+	// Parse CONTINUATION frame
+	continuation_frame, parse_err := parse_continuation_frame(header^, payload)
+	if parse_err != .None {
+		fmt.eprintfln("[HTTP/2] Failed to parse CONTINUATION frame: %v", parse_err)
+		protocol_handler_send_goaway(handler, .PROTOCOL_ERROR)
+		return false
+	}
+
+	// Append header block fragment
+	for b in continuation_frame.header_block {
+		append(&handler.conn.continuation_header_block, b)
+	}
+
+	// Check for END_HEADERS flag
+	end_headers := (header.flags & 0x04) != 0
+
+	if !end_headers {
+		// More CONTINUATION frames expected
+		return true
+	}
+
+	// END_HEADERS received - process complete header block
+	stream, found := connection_get_stream(&handler.conn, header.stream_id)
+	if !found {
+		fmt.eprintfln("[HTTP/2] Stream %d not found for CONTINUATION", header.stream_id)
+		protocol_handler_send_goaway(handler, .PROTOCOL_ERROR)
+		return false
+	}
+
+	// Decode complete header block
+	complete_header_block := handler.conn.continuation_header_block[:]
+	req, ok := request_decode(&handler.decoder, complete_header_block, handler.allocator)
+	if !ok {
+		fmt.eprintln("[HTTP/2] Failed to decode HPACK headers from CONTINUATION")
+		protocol_handler_send_rst_stream(handler, header.stream_id, .COMPRESSION_ERROR)
+		connection_remove_stream(&handler.conn, header.stream_id)
+
+		// Reset continuation state
+		handler.conn.continuation_expected = false
+		handler.conn.continuation_stream_id = 0
+		clear(&handler.conn.continuation_header_block)
+		return true
+	}
+
+	// Mark headers as complete
+	stream.recv_headers_complete = true
+
+	// Reset continuation state
+	handler.conn.continuation_expected = false
+	handler.conn.continuation_stream_id = 0
+	clear(&handler.conn.continuation_header_block)
+
+	// Check if this was a request with or without body
+	// (END_STREAM flag would have been set in the original HEADERS frame)
+	end_stream := stream.state == .Half_Closed_Remote || stream.state == .Closed
+
+	if end_stream {
+		// Request has no body - process immediately
+		defer request_destroy(&req)
+
+		// Handle request
+		resp := handle_request(&req, handler.allocator)
+		defer {
+			for h in resp.headers {
+				delete(h.value)
+			}
+			delete(resp.headers)
+			delete(resp.body)
+		}
+
+		// Send response
+		protocol_handler_send_response(handler, header.stream_id, &resp)
+
+		// Clean up closed stream
+		if stream.state == .Closed {
+			connection_remove_stream(&handler.conn, header.stream_id)
+		}
+	} else {
+		// Request has body - store header block for later processing with body
+		request_destroy(&req)
+
+		// Copy complete header block for later
+		header_block_copy := make([]byte, len(complete_header_block), handler.allocator)
+		copy(header_block_copy, complete_header_block)
 		stream.recv_header_block = header_block_copy
 	}
 
@@ -408,7 +544,13 @@ protocol_handler_handle_data :: proc(handler: ^Protocol_Handler, header: ^Frame_
 
 		// Handle request
 		resp := handle_request(&req, handler.allocator)
-		defer delete(resp.headers)
+		defer {
+			for h in resp.headers {
+				delete(h.value)
+			}
+			delete(resp.headers)
+			delete(resp.body)
+		}
 
 		// Send response
 		protocol_handler_send_response(handler, header.stream_id, &resp)

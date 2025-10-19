@@ -50,7 +50,7 @@ request_destroy :: proc(req: ^Request) {
 		delete(h.value)
 	}
 	delete(req.headers)
-	delete(req.body)
+	// Note: req.body is just a view into stream.recv_body, don't delete it
 }
 
 // response_encode encodes a Response into HEADERS + DATA frames
@@ -102,8 +102,14 @@ handle_request :: proc(req: ^Request, allocator := context.allocator) -> Respons
 
 	// Build response headers
 	headers := make([]hpack.Header, 2, allocator)
-	headers[0] = hpack.Header{name = "content-type", value = "text/plain"}
+
+	// Allocate copies of string literals so they can be freed properly
+	content_type_copy := make([]byte, len("text/plain"), allocator)
+	copy(content_type_copy, transmute([]byte)string("text/plain"))
+
+	headers[0] = hpack.Header{name = "content-type", value = string(content_type_copy)}
 	headers[1] = hpack.Header{name = "content-length", value = content_length_str}
+	// Note: content_length_str and content_type_copy ownership transferred to headers
 
 	// Copy body for response
 	body_bytes := make([]byte, len(body_str), allocator)

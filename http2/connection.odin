@@ -14,17 +14,23 @@ Connection_State :: enum {
 
 // HTTP2_Connection manages an HTTP/2 connection with multiple streams
 HTTP2_Connection :: struct {
-	state:              Connection_State,
-	settings:           Settings_Context,
-	streams:            map[u32]Stream,  // Active streams by ID
-	next_stream_id:     u32,              // Next stream ID to use (for server push)
-	last_stream_id:     u32,              // Last stream ID processed
-	goaway_sent:        bool,
-	goaway_received:    bool,
-	goaway_error_code:  Error_Code,
-	connection_window:  i32,              // Connection-level flow control window
-	preface_received:   bool,
-	allocator:          runtime.Allocator,
+	state:                      Connection_State,
+	settings:                   Settings_Context,
+	streams:                    map[u32]Stream,  // Active streams by ID
+	next_stream_id:             u32,              // Next stream ID to use (for server push)
+	last_stream_id:             u32,              // Last stream ID processed
+	goaway_sent:                bool,
+	goaway_received:            bool,
+	goaway_error_code:          Error_Code,
+	connection_window:          i32,              // Connection-level flow control window
+	preface_received:           bool,
+
+	// CONTINUATION frame state
+	continuation_expected:      bool,             // Expecting CONTINUATION frames
+	continuation_stream_id:     u32,              // Stream ID for CONTINUATION sequence
+	continuation_header_block:  [dynamic]byte,    // Accumulated header block fragments
+
+	allocator:                  runtime.Allocator,
 }
 
 // Connection_Error represents connection-level errors
@@ -50,6 +56,8 @@ connection_init :: proc(is_server: bool, allocator := context.allocator) -> (con
 
 	settings := settings_init(allocator)
 
+	continuation_header_block := make([dynamic]byte, 0, 0, allocator)
+
 	return HTTP2_Connection{
 		state = .Waiting_Preface,
 		settings = settings,
@@ -61,6 +69,11 @@ connection_init :: proc(is_server: bool, allocator := context.allocator) -> (con
 		goaway_error_code = .NO_ERROR,
 		connection_window = DEFAULT_INITIAL_WINDOW_SIZE,
 		preface_received = false,
+
+		continuation_expected = false,
+		continuation_stream_id = 0,
+		continuation_header_block = continuation_header_block,
+
 		allocator = allocator,
 	}, true
 }
@@ -77,6 +90,9 @@ connection_destroy :: proc(conn: ^HTTP2_Connection) {
 		stream_destroy(&s)
 	}
 	delete(conn.streams)
+
+	// Clean up continuation state
+	delete(conn.continuation_header_block)
 
 	settings_destroy(&conn.settings)
 }
