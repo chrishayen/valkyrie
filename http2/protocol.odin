@@ -175,13 +175,11 @@ protocol_handler_process_frame :: proc(handler: ^Protocol_Handler, frame_data: [
 	case .HEADERS:
 		return protocol_handler_handle_headers(handler, &header, payload)
 	case .DATA:
-		// DATA frame handling (not implemented yet)
-		return true
+		return protocol_handler_handle_data(handler, &header, payload)
 	case .PING:
 		return protocol_handler_handle_ping(handler, &header, payload)
 	case .WINDOW_UPDATE:
-		// WINDOW_UPDATE handling (not implemented yet)
-		return true
+		return protocol_handler_handle_window_update(handler, &header, payload)
 	case .RST_STREAM:
 		return true
 	case .GOAWAY:
@@ -262,16 +260,126 @@ protocol_handler_handle_headers :: proc(handler: ^Protocol_Handler, header: ^Fra
 	if !ok {
 		return false
 	}
-	defer request_destroy(&req)
 
-	// Handle request
-	resp := handle_request(&req, handler.allocator)
-	defer delete(resp.headers)
+	// Mark headers as complete
+	stream.recv_headers_complete = true
 
-	// Send response
-	protocol_handler_send_response(handler, header.stream_id, &resp)
+	// If END_STREAM in HEADERS, process request immediately (no body expected)
+	if end_stream {
+		// Request has no body
+		defer request_destroy(&req)
 
-	// Clean up closed stream after sending complete response
+		// Handle request
+		resp := handle_request(&req, handler.allocator)
+		defer delete(resp.headers)
+
+		// Send response
+		protocol_handler_send_response(handler, header.stream_id, &resp)
+
+		// Clean up closed stream after sending complete response
+		if stream.state == .Closed {
+			connection_remove_stream(&handler.conn, header.stream_id)
+		}
+	} else {
+		// Request has body - store header block for later processing
+		// Clean up the decoded request for now (we'll decode again later with body)
+		request_destroy(&req)
+
+		// Copy header block for later
+		header_block_copy := make([]byte, len(headers_frame.header_block), handler.allocator)
+		copy(header_block_copy, headers_frame.header_block)
+		stream.recv_header_block = header_block_copy
+	}
+
+	return true
+}
+
+// protocol_handler_handle_data processes a DATA frame
+protocol_handler_handle_data :: proc(handler: ^Protocol_Handler, header: ^Frame_Header, payload: []byte) -> bool {
+	if handler == nil {
+		return false
+	}
+
+	// DATA frames must be associated with a stream
+	if header.stream_id == 0 {
+		fmt.eprintln("[HTTP/2] DATA frame on stream 0 is invalid")
+		return false
+	}
+
+	// Get stream
+	stream, found := connection_get_stream(&handler.conn, header.stream_id)
+	if !found {
+		fmt.eprintfln("[HTTP/2] DATA frame on non-existent stream %d", header.stream_id)
+		return false
+	}
+
+	// Parse DATA frame
+	data_frame, parse_err := parse_data_frame(header^, payload)
+	if parse_err != .None {
+		fmt.eprintfln("[HTTP/2] Failed to parse DATA frame: %v", parse_err)
+		return false
+	}
+
+	// Check stream state allows receiving data
+	if !stream_can_recv_data(stream) {
+		fmt.eprintfln("[HTTP/2] Stream %d cannot receive DATA in state %v", header.stream_id, stream.state)
+		return false
+	}
+
+	data_len := len(data_frame.data)
+	end_stream := (header.flags & 0x01) != 0
+
+	// Check connection-level flow control
+	if handler.conn.connection_window < i32(data_len) {
+		fmt.eprintfln("[HTTP/2] Connection flow control violation: need %d, have %d", data_len, handler.conn.connection_window)
+		return false
+	}
+
+	// Process data reception (checks stream-level flow control)
+	stream_err := stream_recv_data(stream, data_len, end_stream)
+	if stream_err != .None {
+		fmt.eprintfln("[HTTP/2] Stream error processing DATA: %v", stream_err)
+		return false
+	}
+
+	// Consume connection-level window
+	conn_err := connection_consume_window(&handler.conn, i32(data_len))
+	if conn_err != .None {
+		fmt.eprintfln("[HTTP/2] Connection flow control error: %v", conn_err)
+		return false
+	}
+
+	// Append data to stream body buffer
+	if data_len > 0 {
+		for b in data_frame.data {
+			append(&stream.recv_body, b)
+		}
+	}
+
+	// Replenish flow control windows if needed (before they're exhausted)
+	protocol_handler_replenish_windows(handler, header.stream_id)
+
+	// If END_STREAM received, process complete request with body
+	if end_stream && stream.recv_headers_complete {
+		// Decode headers with accumulated body
+		req, ok := request_decode(&handler.decoder, stream.recv_header_block, handler.allocator)
+		if !ok {
+			return false
+		}
+		defer request_destroy(&req)
+
+		// Attach body
+		req.body = stream.recv_body[:]
+
+		// Handle request
+		resp := handle_request(&req, handler.allocator)
+		defer delete(resp.headers)
+
+		// Send response
+		protocol_handler_send_response(handler, header.stream_id, &resp)
+	}
+
+	// If stream is now closed (received END_STREAM), remove it
 	if stream.state == .Closed {
 		connection_remove_stream(&handler.conn, header.stream_id)
 	}
@@ -288,6 +396,50 @@ protocol_handler_handle_ping :: proc(handler: ^Protocol_Handler, header: ^Frame_
 
 	// Send PING ACK with same data
 	protocol_handler_send_ping_ack(handler, payload)
+	return true
+}
+
+// protocol_handler_handle_window_update processes a WINDOW_UPDATE frame
+protocol_handler_handle_window_update :: proc(handler: ^Protocol_Handler, header: ^Frame_Header, payload: []byte) -> bool {
+	if handler == nil {
+		return false
+	}
+
+	// Parse WINDOW_UPDATE frame
+	window_frame, parse_err := parse_window_update_frame(header^, payload)
+	if parse_err != .None {
+		fmt.eprintfln("[HTTP/2] Failed to parse WINDOW_UPDATE frame: %v", parse_err)
+		return false
+	}
+
+	increment := i32(window_frame.window_size_increment)
+	if increment <= 0 {
+		fmt.eprintln("[HTTP/2] WINDOW_UPDATE with zero increment")
+		return false
+	}
+
+	if header.stream_id == 0 {
+		// Connection-level window update
+		err := connection_update_window(&handler.conn, increment)
+		if err != .None {
+			fmt.eprintfln("[HTTP/2] Connection WINDOW_UPDATE error: %v", err)
+			return false
+		}
+	} else {
+		// Stream-level window update
+		stream, found := connection_get_stream(&handler.conn, header.stream_id)
+		if !found {
+			fmt.eprintfln("[HTTP/2] WINDOW_UPDATE on non-existent stream %d", header.stream_id)
+			return false
+		}
+
+		err := stream_recv_window_update(stream, increment)
+		if err != .None {
+			fmt.eprintfln("[HTTP/2] Stream WINDOW_UPDATE error: %v", err)
+			return false
+		}
+	}
+
 	return true
 }
 
@@ -430,4 +582,67 @@ protocol_handler_send_initial_settings :: proc(handler: ^Protocol_Handler) {
 		}
 		append(&handler.write_buffer, ..setting_bytes[:])
 	}
+}
+
+// protocol_handler_send_window_update sends a WINDOW_UPDATE frame
+protocol_handler_send_window_update :: proc(handler: ^Protocol_Handler, stream_id: u32, increment: i32) {
+	if handler == nil || increment <= 0 {
+		return
+	}
+
+	header := Frame_Header{
+		length = 4,
+		type = .WINDOW_UPDATE,
+		flags = 0,
+		stream_id = stream_id,
+	}
+	protocol_handler_write_frame_header(handler, &header)
+
+	// Write window size increment (4 bytes, big-endian, reserved bit cleared)
+	increment_u32 := u32(increment) & STREAM_ID_MASK
+	increment_bytes := [4]u8{
+		u8(increment_u32 >> 24),
+		u8(increment_u32 >> 16),
+		u8(increment_u32 >> 8),
+		u8(increment_u32),
+	}
+	append(&handler.write_buffer, ..increment_bytes[:])
+}
+
+// protocol_handler_replenish_windows checks and replenishes flow control windows
+// Returns true if windows were replenished
+protocol_handler_replenish_windows :: proc(handler: ^Protocol_Handler, stream_id: u32) -> bool {
+	if handler == nil {
+		return false
+	}
+
+	sent_update := false
+	initial_window := i32(DEFAULT_INITIAL_WINDOW_SIZE)
+
+	// Replenish connection-level window if below 50%
+	conn_threshold := initial_window / 2
+	if handler.conn.connection_window < conn_threshold {
+		increment := initial_window - handler.conn.connection_window
+		err := connection_update_window(&handler.conn, increment)
+		if err == .None {
+			protocol_handler_send_window_update(handler, 0, increment)  // stream_id 0 = connection-level
+			sent_update = true
+		}
+	}
+
+	// Replenish stream-level window if below 50%
+	stream, found := connection_get_stream(&handler.conn, stream_id)
+	if found {
+		stream_threshold := initial_window / 2
+		if stream.window_size < stream_threshold {
+			increment := initial_window - stream.window_size
+			err := stream_send_window_update(stream, increment)
+			if err == .None {
+				protocol_handler_send_window_update(handler, stream_id, increment)
+				sent_update = true
+			}
+		}
+	}
+
+	return sent_update
 }

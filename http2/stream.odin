@@ -24,6 +24,9 @@ Stream :: struct {
 	priority_exclusive:    bool, // Exclusive dependency flag
 	recv_end_stream:       bool, // Received END_STREAM flag
 	sent_end_stream:       bool, // Sent END_STREAM flag
+	recv_body:             [dynamic]byte,  // Accumulated request body data
+	recv_headers_complete: bool,           // Whether we've received complete headers
+	recv_header_block:     []byte,         // Stored header block for deferred decoding
 	allocator:             runtime.Allocator,
 }
 
@@ -49,6 +52,9 @@ stream_init :: proc(id: u32, initial_window_size: i32 = 65535, allocator := cont
 		priority_exclusive = false,
 		recv_end_stream = false,
 		sent_end_stream = false,
+		recv_body = make([dynamic]byte, 0, 0, allocator),
+		recv_headers_complete = false,
+		recv_header_block = nil,
 		allocator = allocator,
 	}
 }
@@ -58,7 +64,10 @@ stream_destroy :: proc(stream: ^Stream) {
 	if stream == nil {
 		return
 	}
-	// Future: cleanup any buffered data
+	delete(stream.recv_body)
+	if stream.recv_header_block != nil {
+		delete(stream.recv_header_block)
+	}
 }
 
 // stream_recv_headers processes receiving a HEADERS frame

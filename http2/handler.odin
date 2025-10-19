@@ -85,15 +85,29 @@ response_encode :: proc(encoder: ^hpack.Encoder_Context, resp: ^Response, alloca
 	return encoded, true
 }
 
-// handle_request is a simple request handler that returns "Hello, HTTP/2!"
+// handle_request processes an HTTP/2 request and returns a response
 handle_request :: proc(req: ^Request, allocator := context.allocator) -> Response {
-	body := "Hello, HTTP/2!\n"
-	body_bytes := transmute([]byte)body
+	// Simple echo handler - returns information about the request
+	body_str := fmt.aprintf(
+		"HTTP/2 Request Received\n\nMethod: %s\nPath: %s\n\nRequest Body Length: %d bytes\n",
+		req.method,
+		req.path,
+		len(req.body),
+		allocator = allocator,
+	)
+	defer delete(body_str)
 
-	// Simple response headers
+	// Calculate actual content length
+	content_length_str := fmt.aprintf("%d", len(body_str), allocator = allocator)
+
+	// Build response headers
 	headers := make([]hpack.Header, 2, allocator)
 	headers[0] = hpack.Header{name = "content-type", value = "text/plain"}
-	headers[1] = hpack.Header{name = "content-length", value = "15"}
+	headers[1] = hpack.Header{name = "content-length", value = content_length_str}
+
+	// Copy body for response
+	body_bytes := make([]byte, len(body_str), allocator)
+	copy(body_bytes, transmute([]byte)body_str)
 
 	return Response{
 		status = 200,
