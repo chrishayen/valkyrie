@@ -596,11 +596,19 @@ protocol_handler_handle_window_update :: proc(handler: ^Protocol_Handler, header
 	}
 
 	if header.stream_id == 0 {
-		// Connection-level window update
-		err := connection_update_window(&handler.conn, increment)
+		// Connection-level window update from peer (they can receive more)
+		err := connection_update_remote_window(&handler.conn, increment)
 		if err != .None {
 			fmt.eprintfln("[HTTP/2] Connection WINDOW_UPDATE error: %v", err)
 			return false
+		}
+
+		// Resume any streams that have queued data (connection window was blocking them)
+		for id in handler.conn.streams {
+			stream := &handler.conn.streams[id]
+			if stream.pending_send_data != nil && len(stream.pending_send_data) > 0 {
+				protocol_handler_resume_stream_send(handler, id)
+			}
 		}
 	} else {
 		// Stream-level window update
@@ -615,6 +623,9 @@ protocol_handler_handle_window_update :: proc(handler: ^Protocol_Handler, header
 			fmt.eprintfln("[HTTP/2] Stream WINDOW_UPDATE error: %v", err)
 			return false
 		}
+
+		// Resume sending queued data on this stream
+		protocol_handler_resume_stream_send(handler, header.stream_id)
 	}
 
 	return true
@@ -689,7 +700,7 @@ protocol_handler_send_ping_ack :: proc(handler: ^Protocol_Handler, data: []byte)
 	append(&handler.write_buffer, ..data)
 }
 
-// protocol_handler_send_response sends an HTTP/2 response
+// protocol_handler_send_response sends an HTTP/2 response with flow control
 protocol_handler_send_response :: proc(handler: ^Protocol_Handler, stream_id: u32, resp: ^Response) {
 	// Get stream
 	stream, found := connection_get_stream(&handler.conn, stream_id)
@@ -704,7 +715,7 @@ protocol_handler_send_response :: proc(handler: ^Protocol_Handler, stream_id: u3
 	}
 	defer delete(headers_encoded)
 
-	// Send HEADERS frame
+	// Send HEADERS frame (headers don't consume flow control)
 	headers_header := Frame_Header{
 		length = u32(len(headers_encoded)),
 		type = .HEADERS,
@@ -717,18 +728,130 @@ protocol_handler_send_response :: proc(handler: ^Protocol_Handler, stream_id: u3
 	// Update stream state for sending HEADERS (without END_STREAM)
 	stream_send_headers(stream, false)
 
-	// Send DATA frame with END_STREAM
-	data_header := Frame_Header{
-		length = u32(len(resp.body)),
-		type = .DATA,
-		flags = 0x01,  // END_STREAM
-		stream_id = stream_id,
-	}
-	protocol_handler_write_frame_header(handler, &data_header)
-	append(&handler.write_buffer, ..resp.body)
+	// Send DATA frames with flow control
+	body_data := resp.body
+	bytes_sent := 0
+	max_frame_size := settings_get_remote_max_frame_size(&handler.conn.settings)
 
-	// Update stream state for sending DATA with END_STREAM
-	stream_send_data(stream, len(resp.body), true)
+	for bytes_sent < len(body_data) {
+		remaining := len(body_data) - bytes_sent
+
+		// Calculate how much we can send in this frame
+		// Limited by: stream window, connection window, and max frame size
+		available_stream := stream.remote_window_size
+		available_conn := handler.conn.remote_connection_window
+		available := min(available_stream, available_conn)
+		available = min(available, i32(max_frame_size))
+		available = min(available, i32(remaining))
+
+		if available <= 0 {
+			// No flow control window available - queue remaining data
+			remaining_data := body_data[bytes_sent:]
+			stream.pending_send_data = make([]byte, len(remaining_data), handler.allocator)
+			copy(stream.pending_send_data, remaining_data)
+			stream.pending_send_end_stream = true  // Remember to send END_STREAM when done
+			fmt.eprintfln("[HTTP/2] Flow control exhausted, queued %d bytes for later", len(remaining_data))
+			break
+		}
+
+		chunk_size := int(available)
+		chunk := body_data[bytes_sent:bytes_sent + chunk_size]
+		is_last_frame := (bytes_sent + chunk_size) >= len(body_data)
+
+		// Send DATA frame
+		flags := u8(0)
+		if is_last_frame {
+			flags = 0x01  // END_STREAM
+		}
+
+		data_header := Frame_Header{
+			length = u32(chunk_size),
+			type = .DATA,
+			flags = flags,
+			stream_id = stream_id,
+		}
+		protocol_handler_write_frame_header(handler, &data_header)
+		append(&handler.write_buffer, ..chunk)
+
+		// Consume flow control windows
+		stream.remote_window_size -= i32(chunk_size)
+		handler.conn.remote_connection_window -= i32(chunk_size)
+
+		// Update stream state
+		stream_send_data(stream, chunk_size, is_last_frame)
+
+		bytes_sent += chunk_size
+	}
+}
+
+// protocol_handler_resume_stream_send resumes sending queued data after WINDOW_UPDATE
+protocol_handler_resume_stream_send :: proc(handler: ^Protocol_Handler, stream_id: u32) {
+	stream, found := connection_get_stream(&handler.conn, stream_id)
+	if !found || stream.pending_send_data == nil || len(stream.pending_send_data) == 0 {
+		return
+	}
+
+	// Try to send queued data
+	body_data := stream.pending_send_data
+	bytes_sent := 0
+	max_frame_size := settings_get_remote_max_frame_size(&handler.conn.settings)
+
+	for bytes_sent < len(body_data) {
+		remaining := len(body_data) - bytes_sent
+
+		// Calculate how much we can send
+		available_stream := stream.remote_window_size
+		available_conn := handler.conn.remote_connection_window
+		available := min(available_stream, available_conn)
+		available = min(available, i32(max_frame_size))
+		available = min(available, i32(remaining))
+
+		if available <= 0 {
+			// Still no window - keep data queued
+			if bytes_sent > 0 {
+				// Sent some data, update queue
+				remaining_data := body_data[bytes_sent:]
+				new_pending := make([]byte, len(remaining_data), handler.allocator)
+				copy(new_pending, remaining_data)
+				delete(stream.pending_send_data)
+				stream.pending_send_data = new_pending
+			}
+			return
+		}
+
+		chunk_size := int(available)
+		chunk := body_data[bytes_sent:bytes_sent + chunk_size]
+		is_last_frame := (bytes_sent + chunk_size) >= len(body_data)
+
+		// Send DATA frame
+		flags := u8(0)
+		if is_last_frame && stream.pending_send_end_stream {
+			flags = 0x01  // END_STREAM
+		}
+
+		data_header := Frame_Header{
+			length = u32(chunk_size),
+			type = .DATA,
+			flags = flags,
+			stream_id = stream_id,
+		}
+		protocol_handler_write_frame_header(handler, &data_header)
+		append(&handler.write_buffer, ..chunk)
+
+		// Consume flow control windows
+		stream.remote_window_size -= i32(chunk_size)
+		handler.conn.remote_connection_window -= i32(chunk_size)
+
+		// Update stream state
+		stream_send_data(stream, chunk_size, is_last_frame && stream.pending_send_end_stream)
+
+		bytes_sent += chunk_size
+	}
+
+	// All queued data sent - clear the queue
+	delete(stream.pending_send_data)
+	stream.pending_send_data = nil
+	stream.pending_send_end_stream = false
 }
 
 // protocol_handler_write_frame_header writes a frame header to the write buffer

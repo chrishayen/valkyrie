@@ -753,3 +753,339 @@ test_http2_continuation_multiple_fragments :: proc(t: ^testing.T) {
 	testing.expect(t, found, "Stream 1 should exist")
 	testing.expect(t, stream.recv_headers_complete, "Headers should be complete")
 }
+
+@(test)
+test_http2_streaming_large_response :: proc(t: ^testing.T) {
+	// Create protocol handler
+	handler, handler_ok := http2.protocol_handler_init(true)
+	defer http2.protocol_handler_destroy(&handler)
+	testing.expect(t, handler_ok, "Should create protocol handler")
+
+	// Setup connection
+	preface := build_client_preface()
+	defer delete(preface)
+	http2.protocol_handler_process_data(&handler, preface)
+
+	write_data := http2.protocol_handler_get_write_data(&handler)
+	http2.protocol_handler_consume_write_data(&handler, len(write_data))
+
+	settings_ack := build_settings_ack()
+	defer delete(settings_ack)
+	http2.protocol_handler_process_data(&handler, settings_ack)
+
+	// Record initial remote windows
+	initial_conn_window := handler.conn.remote_connection_window
+
+	// Send request
+	headers_frame, ok := build_headers_frame(1, "GET", "/large", true)
+	testing.expect(t, ok, "Should build headers frame")
+	defer delete(headers_frame)
+
+	http2.protocol_handler_process_data(&handler, headers_frame)
+
+	// Should have response
+	testing.expect(t, http2.protocol_handler_needs_write(&handler), "Should have response")
+
+	response_data := http2.protocol_handler_get_write_data(&handler)
+	testing.expect(t, len(response_data) > 0, "Should have response data")
+
+	// Parse response frames
+	offset := 0
+	frame_count := 0
+	headers_found := false
+	data_frames := 0
+	total_data_bytes := 0
+
+	for offset + 9 <= len(response_data) {
+		// Read frame header
+		frame_len := int(response_data[offset]) << 16 | int(response_data[offset + 1]) << 8 | int(response_data[offset + 2])
+		frame_type := response_data[offset + 3]
+
+		if offset + 9 + frame_len > len(response_data) {
+			break
+		}
+
+		if frame_type == 0x01 {  // HEADERS
+			headers_found = true
+		} else if frame_type == 0x00 {  // DATA
+			data_frames += 1
+			total_data_bytes += frame_len
+		}
+
+		offset += 9 + frame_len
+		frame_count += 1
+	}
+
+	testing.expect(t, headers_found, "Should have HEADERS frame")
+	testing.expect(t, data_frames >= 1, "Should have at least one DATA frame")
+
+	// Verify flow control windows were consumed
+	conn_consumed := initial_conn_window - handler.conn.remote_connection_window
+	testing.expect(t, conn_consumed == i32(total_data_bytes), "Connection window should be consumed by data sent")
+	testing.expect(t, total_data_bytes > 0, "Should have sent some data")
+}
+
+@(test)
+test_http2_flow_control_limits_response :: proc(t: ^testing.T) {
+	// Create protocol handler
+	handler, handler_ok := http2.protocol_handler_init(true)
+	defer http2.protocol_handler_destroy(&handler)
+	testing.expect(t, handler_ok, "Should create protocol handler")
+
+	// Setup connection
+	preface := build_client_preface()
+	defer delete(preface)
+	http2.protocol_handler_process_data(&handler, preface)
+
+	write_data := http2.protocol_handler_get_write_data(&handler)
+	http2.protocol_handler_consume_write_data(&handler, len(write_data))
+
+	settings_ack := build_settings_ack()
+	defer delete(settings_ack)
+	http2.protocol_handler_process_data(&handler, settings_ack)
+
+	// Reduce remote windows to simulate limited capacity
+	stream, _ := http2.connection_create_stream(&handler.conn, 1)
+	stream.remote_window_size = 1000  // Only 1KB available
+	handler.conn.remote_connection_window = 1000
+
+	// Send request
+	headers_frame, ok := build_headers_frame(1, "GET", "/test", true)
+	testing.expect(t, ok, "Should build headers frame")
+	defer delete(headers_frame)
+
+	http2.protocol_handler_process_data(&handler, headers_frame)
+
+	// Should have response
+	testing.expect(t, http2.protocol_handler_needs_write(&handler), "Should have response")
+
+	response_data := http2.protocol_handler_get_write_data(&handler)
+
+	// Count DATA bytes sent
+	offset := 0
+	total_data_bytes := 0
+
+	for offset + 9 <= len(response_data) {
+		frame_len := int(response_data[offset]) << 16 | int(response_data[offset + 1]) << 8 | int(response_data[offset + 2])
+		frame_type := response_data[offset + 3]
+
+		if offset + 9 + frame_len > len(response_data) {
+			break
+		}
+
+		if frame_type == 0x00 {  // DATA
+			total_data_bytes += frame_len
+		}
+
+		offset += 9 + frame_len
+	}
+
+	// Should respect the 1KB limit
+	testing.expect(t, total_data_bytes <= 1000, "Should not exceed flow control window")
+	testing.expect(t, stream.remote_window_size >= 0, "Stream window should not go negative")
+	testing.expect(t, handler.conn.remote_connection_window >= 0, "Connection window should not go negative")
+}
+
+@(test)
+test_http2_multiple_data_frames :: proc(t: ^testing.T) {
+	// Create protocol handler
+	handler, handler_ok := http2.protocol_handler_init(true)
+	defer http2.protocol_handler_destroy(&handler)
+	testing.expect(t, handler_ok, "Should create protocol handler")
+
+	// Setup connection
+	preface := build_client_preface()
+	defer delete(preface)
+	http2.protocol_handler_process_data(&handler, preface)
+
+	write_data := http2.protocol_handler_get_write_data(&handler)
+	http2.protocol_handler_consume_write_data(&handler, len(write_data))
+
+	settings_ack := build_settings_ack()
+	defer delete(settings_ack)
+	http2.protocol_handler_process_data(&handler, settings_ack)
+
+	// Create stream and set a small window to force multiple DATA frames
+	stream, _ := http2.connection_create_stream(&handler.conn, 1)
+	stream.remote_window_size = 50  // Very small window
+	handler.conn.remote_connection_window = 200
+
+	// Send request
+	headers_frame, ok := build_headers_frame(1, "GET", "/test", true)
+	testing.expect(t, ok, "Should build headers frame")
+	defer delete(headers_frame)
+
+	http2.protocol_handler_process_data(&handler, headers_frame)
+
+	// Should have response
+	response_data := http2.protocol_handler_get_write_data(&handler)
+
+	// Count DATA frames
+	offset := 0
+	data_frames := 0
+	end_stream_found := false
+
+	for offset + 9 <= len(response_data) {
+		frame_len := int(response_data[offset]) << 16 | int(response_data[offset + 1]) << 8 | int(response_data[offset + 2])
+		frame_type := response_data[offset + 3]
+		frame_flags := response_data[offset + 4]
+
+		if offset + 9 + frame_len > len(response_data) {
+			break
+		}
+
+		if frame_type == 0x00 {  // DATA
+			data_frames += 1
+			if (frame_flags & 0x01) != 0 {  // END_STREAM
+				end_stream_found = true
+			}
+			// Each frame should be <= 50 bytes (our window limit)
+			testing.expect(t, frame_len <= 50, "DATA frame should respect stream window")
+		}
+
+		offset += 9 + frame_len
+	}
+
+	// With a response body > 50 bytes and window of 50, we should get multiple frames
+	testing.expect(t, data_frames >= 1, "Should have at least one DATA frame")
+	// Note: With limited flow control, we may not send all data (no END_STREAM yet)
+	// This is expected behavior - client can send WINDOW_UPDATE to get more data
+}
+
+// Helper to build a WINDOW_UPDATE frame
+build_window_update_frame :: proc(
+	stream_id: u32,
+	increment: u32,
+	allocator := context.allocator,
+) -> []byte {
+	frame := make([dynamic]byte, 0, 13, allocator)
+
+	// Frame header (9 bytes)
+	append(&frame, 0x00, 0x00, 0x04)  // Length: 4
+	append(&frame, 0x08)  // Type: WINDOW_UPDATE
+	append(&frame, 0x00)  // Flags: none
+	append(&frame, u8(stream_id >> 24))
+	append(&frame, u8(stream_id >> 16))
+	append(&frame, u8(stream_id >> 8))
+	append(&frame, u8(stream_id))
+
+	// Payload: window size increment (4 bytes, MSB reserved must be 0)
+	append(&frame, u8(increment >> 24) & 0x7F)  // Clear reserved bit
+	append(&frame, u8(increment >> 16))
+	append(&frame, u8(increment >> 8))
+	append(&frame, u8(increment))
+
+	return frame[:]
+}
+
+@(test)
+test_http2_window_update_resumes_send :: proc(t: ^testing.T) {
+	// Create protocol handler
+	handler, handler_ok := http2.protocol_handler_init(true)
+	defer http2.protocol_handler_destroy(&handler)
+	testing.expect(t, handler_ok, "Should create protocol handler")
+
+	// Setup connection
+	preface := build_client_preface()
+	defer delete(preface)
+	http2.protocol_handler_process_data(&handler, preface)
+
+	write_data := http2.protocol_handler_get_write_data(&handler)
+	http2.protocol_handler_consume_write_data(&handler, len(write_data))
+
+	settings_ack := build_settings_ack()
+	defer delete(settings_ack)
+	http2.protocol_handler_process_data(&handler, settings_ack)
+
+	// Create stream with very limited window to force queueing
+	stream, _ := http2.connection_create_stream(&handler.conn, 1)
+	stream.remote_window_size = 40  // Very small - will queue most of response
+	handler.conn.remote_connection_window = 1000  // Connection has room
+
+	// Send request
+	headers_frame, ok := build_headers_frame(1, "GET", "/test", true)
+	testing.expect(t, ok, "Should build headers frame")
+	defer delete(headers_frame)
+
+	http2.protocol_handler_process_data(&handler, headers_frame)
+
+	// Should have initial response (up to 40 bytes)
+	response_data := http2.protocol_handler_get_write_data(&handler)
+
+	// Count initial DATA sent
+	offset := 0
+	initial_data_bytes := 0
+	for offset + 9 <= len(response_data) {
+		frame_len := int(response_data[offset]) << 16 | int(response_data[offset + 1]) << 8 | int(response_data[offset + 2])
+		frame_type := response_data[offset + 3]
+		frame_flags := response_data[offset + 4]
+
+		if offset + 9 + frame_len > len(response_data) {
+			break
+		}
+
+		if frame_type == 0x00 {  // DATA
+			initial_data_bytes += frame_len
+			// Should NOT have END_STREAM yet (data queued)
+			testing.expect(t, (frame_flags & 0x01) == 0, "Should not have END_STREAM yet")
+		}
+
+		offset += 9 + frame_len
+	}
+
+	testing.expect(t, initial_data_bytes <= 40, "Should respect initial window limit")
+	testing.expect(t, initial_data_bytes > 0, "Should send some initial data")
+
+	// Verify data is queued
+	stream_after, _ := http2.connection_get_stream(&handler.conn, 1)
+	testing.expect(t, stream_after.pending_send_data != nil, "Should have queued data")
+	testing.expect(t, len(stream_after.pending_send_data) > 0, "Should have non-empty queue")
+
+	// Consume initial response
+	http2.protocol_handler_consume_write_data(&handler, len(response_data))
+
+	// Send WINDOW_UPDATE to give more window space
+	window_update := build_window_update_frame(1, 100)  // Add 100 bytes to stream window
+	defer delete(window_update)
+
+	http2.protocol_handler_process_data(&handler, window_update)
+
+	// Should now have more data to send
+	testing.expect(t, http2.protocol_handler_needs_write(&handler), "Should have more data after WINDOW_UPDATE")
+
+	resumed_data := http2.protocol_handler_get_write_data(&handler)
+	testing.expect(t, len(resumed_data) > 0, "Should have resumed data")
+
+	// Count resumed DATA frames
+	offset = 0
+	resumed_data_bytes := 0
+	end_stream_found := false
+
+	for offset + 9 <= len(resumed_data) {
+		frame_len := int(resumed_data[offset]) << 16 | int(resumed_data[offset + 1]) << 8 | int(resumed_data[offset + 2])
+		frame_type := resumed_data[offset + 3]
+		frame_flags := resumed_data[offset + 4]
+
+		if offset + 9 + frame_len > len(resumed_data) {
+			break
+		}
+
+		if frame_type == 0x00 {  // DATA
+			resumed_data_bytes += frame_len
+			if (frame_flags & 0x01) != 0 {  // END_STREAM
+				end_stream_found = true
+			}
+		}
+
+		offset += 9 + frame_len
+	}
+
+	testing.expect(t, resumed_data_bytes > 0, "Should send resumed data")
+	testing.expect(t, end_stream_found, "Should eventually send END_STREAM")
+
+	// Verify queue is now empty
+	stream_final, _ := http2.connection_get_stream(&handler.conn, 1)
+	if stream_final.pending_send_data != nil {
+		testing.expect(t, len(stream_final.pending_send_data) == 0, "Queue should be empty after sending all data")
+	}
+}

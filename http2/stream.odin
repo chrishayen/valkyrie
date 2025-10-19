@@ -27,6 +27,11 @@ Stream :: struct {
 	recv_body:             [dynamic]byte,  // Accumulated request body data
 	recv_headers_complete: bool,           // Whether we've received complete headers
 	recv_header_block:     []byte,         // Stored header block for deferred decoding
+
+	// Flow control queueing for sending
+	pending_send_data:     []byte,         // Queued response data waiting for flow control
+	pending_send_end_stream: bool,         // Whether END_STREAM should be sent with final chunk
+
 	allocator:             runtime.Allocator,
 }
 
@@ -55,6 +60,8 @@ stream_init :: proc(id: u32, initial_window_size: i32 = 65535, allocator := cont
 		recv_body = make([dynamic]byte, 0, 0, allocator),
 		recv_headers_complete = false,
 		recv_header_block = nil,
+		pending_send_data = nil,
+		pending_send_end_stream = false,
 		allocator = allocator,
 	}
 }
@@ -67,6 +74,9 @@ stream_destroy :: proc(stream: ^Stream) {
 	delete(stream.recv_body)
 	if stream.recv_header_block != nil {
 		delete(stream.recv_header_block)
+	}
+	if stream.pending_send_data != nil {
+		delete(stream.pending_send_data)
 	}
 }
 

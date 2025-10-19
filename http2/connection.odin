@@ -22,7 +22,8 @@ HTTP2_Connection :: struct {
 	goaway_sent:                bool,
 	goaway_received:            bool,
 	goaway_error_code:          Error_Code,
-	connection_window:          i32,              // Connection-level flow control window
+	connection_window:          i32,              // Local flow control window (for receiving)
+	remote_connection_window:   i32,              // Remote's flow control window (for sending)
 	preface_received:           bool,
 
 	// CONTINUATION frame state
@@ -68,6 +69,7 @@ connection_init :: proc(is_server: bool, allocator := context.allocator) -> (con
 		goaway_received = false,
 		goaway_error_code = .NO_ERROR,
 		connection_window = DEFAULT_INITIAL_WINDOW_SIZE,
+		remote_connection_window = DEFAULT_INITIAL_WINDOW_SIZE,
 		preface_received = false,
 
 		continuation_expected = false,
@@ -343,10 +345,51 @@ connection_can_create_stream :: proc(conn: ^HTTP2_Connection) -> bool {
 	return u32(len(conn.streams)) < max_streams
 }
 
-// connection_get_available_window returns available connection window
+// connection_get_available_window returns available connection window (for receiving)
 connection_get_available_window :: proc(conn: ^HTTP2_Connection) -> i32 {
 	if conn == nil {
 		return 0
 	}
 	return conn.connection_window
+}
+
+// connection_get_available_remote_window returns available remote window (for sending)
+connection_get_available_remote_window :: proc(conn: ^HTTP2_Connection) -> i32 {
+	if conn == nil {
+		return 0
+	}
+	return conn.remote_connection_window
+}
+
+// connection_consume_remote_window consumes remote connection window when sending data
+connection_consume_remote_window :: proc(conn: ^HTTP2_Connection, amount: i32) -> Connection_Error {
+	if conn == nil {
+		return .Protocol_Error
+	}
+
+	if conn.remote_connection_window < amount {
+		return .Flow_Control_Error
+	}
+
+	conn.remote_connection_window -= amount
+	return .None
+}
+
+// connection_update_remote_window updates remote connection window from WINDOW_UPDATE
+connection_update_remote_window :: proc(conn: ^HTTP2_Connection, increment: i32) -> Connection_Error {
+	if conn == nil {
+		return .Protocol_Error
+	}
+
+	if increment <= 0 {
+		return .Protocol_Error
+	}
+
+	new_window := conn.remote_connection_window + increment
+	if new_window > MAX_WINDOW_SIZE || new_window < 0 {
+		return .Flow_Control_Error
+	}
+
+	conn.remote_connection_window = new_window
+	return .None
 }
