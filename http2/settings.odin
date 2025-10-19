@@ -207,6 +207,14 @@ settings_get_remote_max_frame_size :: proc(ctx: ^Settings_Context) -> u32 {
 	return ctx.remote_max_frame_size
 }
 
+// settings_get_local_max_concurrent_streams returns max concurrent streams we allow
+settings_get_local_max_concurrent_streams :: proc(ctx: ^Settings_Context) -> u32 {
+	if ctx == nil {
+		return 100
+	}
+	return ctx.local_max_concurrent_streams
+}
+
 // settings_get_remote_max_concurrent_streams returns max concurrent streams peer allows
 settings_get_remote_max_concurrent_streams :: proc(ctx: ^Settings_Context) -> u32 {
 	if ctx == nil {

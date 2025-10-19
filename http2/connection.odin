@@ -165,8 +165,8 @@ connection_create_stream :: proc(conn: ^HTTP2_Connection, stream_id: u32) -> (^S
 		return nil, .Stream_Error
 	}
 
-	// Check stream limit
-	max_streams := settings_get_remote_max_concurrent_streams(&conn.settings)
+	// Check stream limit (use local setting - how many we're willing to accept)
+	max_streams := settings_get_local_max_concurrent_streams(&conn.settings)
 	if u32(len(conn.streams)) >= max_streams {
 		return nil, .Stream_Limit_Exceeded
 	}
@@ -341,7 +341,7 @@ connection_can_create_stream :: proc(conn: ^HTTP2_Connection) -> bool {
 		return false
 	}
 
-	max_streams := settings_get_remote_max_concurrent_streams(&conn.settings)
+	max_streams := settings_get_local_max_concurrent_streams(&conn.settings)
 	return u32(len(conn.streams)) < max_streams
 }
 

@@ -334,8 +334,8 @@ test_http2_connection_stream_limit :: proc(t: ^testing.T) {
 
 	conn.state = .Active
 
-	// Set a low limit
-	http2.settings_apply_remote(&conn.settings, .MAX_CONCURRENT_STREAMS, 2)
+	// Set a low limit (local setting - what we enforce on incoming streams)
+	http2.settings_apply_local(&conn.settings, .MAX_CONCURRENT_STREAMS, 2)
 
 	// Create up to limit
 	http2.connection_create_stream(&conn, 1)
