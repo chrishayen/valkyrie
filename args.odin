@@ -1,4 +1,4 @@
-package http
+package valkyrie
 
 import "core:fmt"
 import "core:os"

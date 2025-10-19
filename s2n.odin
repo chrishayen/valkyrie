@@ -1,4 +1,4 @@
-package http
+package valkyrie
 
 // Odin bindings for s2n-tls (AWS's TLS library)
 // https://github.com/aws/s2n-tls

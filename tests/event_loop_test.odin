@@ -1,16 +1,16 @@
-package http_tests
+package valkyrie_tests
 
 import "core:testing"
 import "core:sys/linux"
 import "core:os"
-import http ".."
+import valkyrie ".."
 
 @(test)
 test_event_loop_init :: proc(t: ^testing.T) {
 	// Positive test: valid max_events
 	{
-		el, ok := http.event_loop_init(128)
-		defer http.event_loop_destroy(&el)
+		el, ok := valkyrie.event_loop_init(128)
+		defer valkyrie.event_loop_destroy(&el)
 
 		testing.expect(t, ok, "event_loop_init should succeed")
 		testing.expect(t, el.epoll_fd >= 0, "epoll_fd should be valid")
@@ -20,25 +20,25 @@ test_event_loop_init :: proc(t: ^testing.T) {
 
 	// Negative test: zero max_events
 	{
-		_, ok := http.event_loop_init(0)
+		_, ok := valkyrie.event_loop_init(0)
 		testing.expect(t, !ok, "event_loop_init should fail with zero max_events")
 	}
 
 	// Negative test: negative max_events
 	{
-		_, ok := http.event_loop_init(-10)
+		_, ok := valkyrie.event_loop_init(-10)
 		testing.expect(t, !ok, "event_loop_init should fail with negative max_events")
 	}
 }
 
 @(test)
 test_event_loop_destroy :: proc(t: ^testing.T) {
-	el, ok := http.event_loop_init(64)
+	el, ok := valkyrie.event_loop_init(64)
 	testing.expect(t, ok)
 
 	original_fd := el.epoll_fd
 
-	http.event_loop_destroy(&el)
+	valkyrie.event_loop_destroy(&el)
 
 	testing.expect_value(t, el.epoll_fd, linux.Fd(-1))
 	testing.expect(t, el.events == nil, "events should be nil after destroy")
@@ -50,8 +50,8 @@ test_event_loop_destroy :: proc(t: ^testing.T) {
 
 @(test)
 test_event_loop_add_remove :: proc(t: ^testing.T) {
-	el, ok := http.event_loop_init(64)
-	defer http.event_loop_destroy(&el)
+	el, ok := valkyrie.event_loop_init(64)
+	defer valkyrie.event_loop_destroy(&el)
 	testing.expect(t, ok)
 
 	// Create a pipe for testing
@@ -67,33 +67,33 @@ test_event_loop_add_remove :: proc(t: ^testing.T) {
 	write_fd := pipes[1]
 
 	// Add read end to event loop
-	added := http.event_loop_add(&el, read_fd, {.Read})
+	added := valkyrie.event_loop_add(&el, read_fd, {.Read})
 	testing.expect(t, added, "should add fd to event loop")
 
 	// Remove from event loop
-	removed := http.event_loop_remove(&el, read_fd)
+	removed := valkyrie.event_loop_remove(&el, read_fd)
 	testing.expect(t, removed, "should remove fd from event loop")
 
 	// Try to remove again (should fail since it's not registered)
-	removed = http.event_loop_remove(&el, read_fd)
+	removed = valkyrie.event_loop_remove(&el, read_fd)
 	testing.expect(t, !removed, "removing unregistered fd should fail")
 }
 
 @(test)
 test_event_loop_add_invalid_fd :: proc(t: ^testing.T) {
-	el, ok := http.event_loop_init(64)
-	defer http.event_loop_destroy(&el)
+	el, ok := valkyrie.event_loop_init(64)
+	defer valkyrie.event_loop_destroy(&el)
 	testing.expect(t, ok)
 
 	// Try to add invalid fd
-	added := http.event_loop_add(&el, linux.Fd(-1), {.Read})
+	added := valkyrie.event_loop_add(&el, linux.Fd(-1), {.Read})
 	testing.expect(t, !added, "adding invalid fd should fail")
 }
 
 @(test)
 test_event_loop_modify :: proc(t: ^testing.T) {
-	el, ok := http.event_loop_init(64)
-	defer http.event_loop_destroy(&el)
+	el, ok := valkyrie.event_loop_init(64)
+	defer valkyrie.event_loop_destroy(&el)
 	testing.expect(t, ok)
 
 	// Create a pipe
@@ -108,21 +108,21 @@ test_event_loop_modify :: proc(t: ^testing.T) {
 	read_fd := pipes[0]
 
 	// Add with Read flag
-	added := http.event_loop_add(&el, read_fd, {.Read})
+	added := valkyrie.event_loop_add(&el, read_fd, {.Read})
 	testing.expect(t, added, "should add fd")
 
 	// Modify to Read + Write
-	modified := http.event_loop_modify(&el, read_fd, {.Read, .Write})
+	modified := valkyrie.event_loop_modify(&el, read_fd, {.Read, .Write})
 	testing.expect(t, modified, "should modify fd flags")
 
 	// Clean up
-	http.event_loop_remove(&el, read_fd)
+	valkyrie.event_loop_remove(&el, read_fd)
 }
 
 @(test)
 test_event_loop_modify_unregistered :: proc(t: ^testing.T) {
-	el, ok := http.event_loop_init(64)
-	defer http.event_loop_destroy(&el)
+	el, ok := valkyrie.event_loop_init(64)
+	defer valkyrie.event_loop_destroy(&el)
 	testing.expect(t, ok)
 
 	// Create a pipe
@@ -135,26 +135,26 @@ test_event_loop_modify_unregistered :: proc(t: ^testing.T) {
 	}
 
 	// Try to modify fd that's not registered
-	modified := http.event_loop_modify(&el, pipes[0], {.Read})
+	modified := valkyrie.event_loop_modify(&el, pipes[0], {.Read})
 	testing.expect(t, !modified, "modifying unregistered fd should fail")
 }
 
 @(test)
 test_event_loop_wait_timeout :: proc(t: ^testing.T) {
-	el, ok := http.event_loop_init(64)
-	defer http.event_loop_destroy(&el)
+	el, ok := valkyrie.event_loop_init(64)
+	defer valkyrie.event_loop_destroy(&el)
 	testing.expect(t, ok)
 
 	// Wait with immediate timeout (non-blocking)
-	events, wait_ok := http.event_loop_wait(&el, 0)
+	events, wait_ok := valkyrie.event_loop_wait(&el, 0)
 	testing.expect(t, wait_ok, "wait should succeed")
 	testing.expect(t, events == nil || len(events) == 0, "should have no events")
 }
 
 @(test)
 test_event_loop_wait_with_event :: proc(t: ^testing.T) {
-	el, ok := http.event_loop_init(64)
-	defer http.event_loop_destroy(&el)
+	el, ok := valkyrie.event_loop_init(64)
+	defer valkyrie.event_loop_destroy(&el)
 	testing.expect(t, ok)
 
 	// Create a pipe
@@ -170,8 +170,8 @@ test_event_loop_wait_with_event :: proc(t: ^testing.T) {
 	write_fd := pipes[1]
 
 	// Add read end to event loop
-	http.event_loop_add(&el, read_fd, {.Read})
-	defer http.event_loop_remove(&el, read_fd)
+	valkyrie.event_loop_add(&el, read_fd, {.Read})
+	defer valkyrie.event_loop_remove(&el, read_fd)
 
 	// Write data to trigger read event
 	test_data := []u8{1, 2, 3, 4, 5}
@@ -179,7 +179,7 @@ test_event_loop_wait_with_event :: proc(t: ^testing.T) {
 	testing.expect(t, write_err == .NONE && written == len(test_data), "write should succeed")
 
 	// Wait for event (small timeout to avoid hanging)
-	events, wait_ok := http.event_loop_wait(&el, 100)
+	events, wait_ok := valkyrie.event_loop_wait(&el, 100)
 	testing.expect(t, wait_ok, "wait should succeed")
 	testing.expect(t, len(events) == 1, "should have one event")
 
@@ -196,8 +196,8 @@ test_event_loop_wait_with_event :: proc(t: ^testing.T) {
 
 @(test)
 test_event_loop_multiple_events :: proc(t: ^testing.T) {
-	el, ok := http.event_loop_init(64)
-	defer http.event_loop_destroy(&el)
+	el, ok := valkyrie.event_loop_init(64)
+	defer valkyrie.event_loop_destroy(&el)
 	testing.expect(t, ok)
 
 	// Create two pipes
@@ -219,11 +219,11 @@ test_event_loop_multiple_events :: proc(t: ^testing.T) {
 	}
 
 	// Add both read ends
-	http.event_loop_add(&el, pipes1[0], {.Read})
-	http.event_loop_add(&el, pipes2[0], {.Read})
+	valkyrie.event_loop_add(&el, pipes1[0], {.Read})
+	valkyrie.event_loop_add(&el, pipes2[0], {.Read})
 	defer {
-		http.event_loop_remove(&el, pipes1[0])
-		http.event_loop_remove(&el, pipes2[0])
+		valkyrie.event_loop_remove(&el, pipes1[0])
+		valkyrie.event_loop_remove(&el, pipes2[0])
 	}
 
 	// Write to both pipes
@@ -232,7 +232,7 @@ test_event_loop_multiple_events :: proc(t: ^testing.T) {
 	linux.write(pipes2[1], test_data)
 
 	// Wait for events
-	events, wait_ok := http.event_loop_wait(&el, 100)
+	events, wait_ok := valkyrie.event_loop_wait(&el, 100)
 	testing.expect(t, wait_ok, "wait should succeed")
 	testing.expect(t, len(events) >= 1, "should have at least one event")
 	// Note: may get 1 or 2 events depending on timing
@@ -246,8 +246,8 @@ test_event_loop_multiple_events :: proc(t: ^testing.T) {
 
 @(test)
 test_event_loop_write_event :: proc(t: ^testing.T) {
-	el, ok := http.event_loop_init(64)
-	defer http.event_loop_destroy(&el)
+	el, ok := valkyrie.event_loop_init(64)
+	defer valkyrie.event_loop_destroy(&el)
 	testing.expect(t, ok)
 
 	// Create a pipe
@@ -262,11 +262,11 @@ test_event_loop_write_event :: proc(t: ^testing.T) {
 	write_fd := pipes[1]
 
 	// Add write end to event loop (should be immediately writable)
-	http.event_loop_add(&el, write_fd, {.Write})
-	defer http.event_loop_remove(&el, write_fd)
+	valkyrie.event_loop_add(&el, write_fd, {.Write})
+	defer valkyrie.event_loop_remove(&el, write_fd)
 
 	// Wait for event
-	events, wait_ok := http.event_loop_wait(&el, 100)
+	events, wait_ok := valkyrie.event_loop_wait(&el, 100)
 	testing.expect(t, wait_ok, "wait should succeed")
 	testing.expect(t, len(events) >= 1, "should have at least one event")
 
@@ -280,45 +280,45 @@ test_event_loop_write_event :: proc(t: ^testing.T) {
 test_epoll_flags_conversion :: proc(t: ^testing.T) {
 	// Test event flags to epoll flags conversion
 	{
-		flags := http.Event_Flags{.Read}
-		epoll_flags := http.epoll_flags_from_event_flags(flags)
+		flags := valkyrie.Event_Flags{.Read}
+		epoll_flags := valkyrie.epoll_flags_from_event_flags(flags)
 		testing.expect(t, .IN in epoll_flags, "Read should convert to IN")
 	}
 
 	{
-		flags := http.Event_Flags{.Write}
-		epoll_flags := http.epoll_flags_from_event_flags(flags)
+		flags := valkyrie.Event_Flags{.Write}
+		epoll_flags := valkyrie.epoll_flags_from_event_flags(flags)
 		testing.expect(t, .OUT in epoll_flags, "Write should convert to OUT")
 	}
 
 	{
-		flags := http.Event_Flags{.Read, .Write}
-		epoll_flags := http.epoll_flags_from_event_flags(flags)
+		flags := valkyrie.Event_Flags{.Read, .Write}
+		epoll_flags := valkyrie.epoll_flags_from_event_flags(flags)
 		testing.expect(t, .IN in epoll_flags && .OUT in epoll_flags, "should convert both")
 	}
 
 	// Test epoll flags to event flags conversion
 	{
 		epoll_flags := linux.EPoll_Event_Set{.IN}
-		flags := http.event_flags_from_epoll_flags(epoll_flags)
+		flags := valkyrie.event_flags_from_epoll_flags(epoll_flags)
 		testing.expect(t, .Read in flags, "IN should convert to Read")
 	}
 
 	{
 		epoll_flags := linux.EPoll_Event_Set{.OUT}
-		flags := http.event_flags_from_epoll_flags(epoll_flags)
+		flags := valkyrie.event_flags_from_epoll_flags(epoll_flags)
 		testing.expect(t, .Write in flags, "OUT should convert to Write")
 	}
 
 	{
 		epoll_flags := linux.EPoll_Event_Set{.HUP}
-		flags := http.event_flags_from_epoll_flags(epoll_flags)
+		flags := valkyrie.event_flags_from_epoll_flags(epoll_flags)
 		testing.expect(t, .HangUp in flags, "HUP should convert to HangUp")
 	}
 
 	{
 		epoll_flags := linux.EPoll_Event_Set{.ERR}
-		flags := http.event_flags_from_epoll_flags(epoll_flags)
+		flags := valkyrie.event_flags_from_epoll_flags(epoll_flags)
 		testing.expect(t, .Error in flags, "ERR should convert to Error")
 	}
 }

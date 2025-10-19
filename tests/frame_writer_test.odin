@@ -1,4 +1,4 @@
-package http_tests
+package valkyrie_tests
 
 import "core:testing"
 import http2 "../http2"
