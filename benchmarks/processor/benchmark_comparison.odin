@@ -3,7 +3,7 @@ package main
 import "core:fmt"
 import "core:time"
 import "core:sync"
-import valkyrie ".."
+import valkyrie "../.."
 
 // Benchmark handler for lockless work pool
 Lockless_Handler :: struct {

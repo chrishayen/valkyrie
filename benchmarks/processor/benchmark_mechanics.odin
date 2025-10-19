@@ -1,6 +1,6 @@
 package main
 
-import valkyrie ".."
+import valkyrie "../.."
 import "core:fmt"
 import "core:sync"
 import "core:time"
