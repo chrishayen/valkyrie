@@ -18,57 +18,58 @@ Work_Result :: struct {
 }
 
 // Lockless SPMC Queue (Single Producer, Multiple Consumers)
-Processor_Lockless_Queue :: struct($T: typeid) {
-	items: [4096]T,
+Processor_Lockless_Queue :: struct($T: typeid, $N: int) {
+	items: [N]T,
 	head:  u32, // Consumer index
 	tail:  u32, // Producer index
 }
 
 // Processor struct holds the state for the work processor
 // Generic over handler type for zero-overhead abstraction
-Processor :: struct($Handler: typeid) {
-	io_to_worker_queue: Processor_Lockless_Queue(Processor_Work_Item),
-	worker_to_io_queue: Processor_Lockless_Queue(Processor_Work_Item),
+Processor :: struct($Handler: typeid, $QueueSize: int = 4096) {
+	io_to_worker_queue: Processor_Lockless_Queue(Processor_Work_Item, QueueSize),
+	worker_to_io_queue: Processor_Lockless_Queue(Processor_Work_Item, QueueSize),
 	workers:            [dynamic]^thread.Thread,
 	handler:            Handler,
 	shutdown:           bool,
 }
 
 // processor_lockless_queue_init initializes a lockless SPMC queue
-processor_lockless_queue_init :: proc($T: typeid) -> Processor_Lockless_Queue(T) {
-	return Processor_Lockless_Queue(T){}
+processor_lockless_queue_init :: proc($T: typeid, $N: int) -> Processor_Lockless_Queue(T, N) {
+	return Processor_Lockless_Queue(T, N){}
 }
 
 // processor_lockless_queue_is_full checks if the queue is full
-processor_lockless_queue_is_full :: proc(queue: ^Processor_Lockless_Queue($T)) -> bool {
+processor_lockless_queue_is_full :: proc(queue: ^Processor_Lockless_Queue($T, $N)) -> bool {
 	head := sync.atomic_load(&queue.head)
 	tail := sync.atomic_load(&queue.tail)
-	return (tail + 1) % 4096 == head
+	return (tail + 1) % u32(N) == head
 }
 
 // processor_lockless_queue_is_empty checks if the queue is empty
-processor_lockless_queue_is_empty :: proc(queue: ^Processor_Lockless_Queue($T)) -> bool {
+processor_lockless_queue_is_empty :: proc(queue: ^Processor_Lockless_Queue($T, $N)) -> bool {
 	head := sync.atomic_load(&queue.head)
 	tail := sync.atomic_load(&queue.tail)
 	return head == tail
 }
 
 // processor_lockless_queue_push adds an item to the queue (producer side, single producer)
-processor_lockless_queue_push :: proc(queue: ^Processor_Lockless_Queue($T), item: T) -> bool {
+processor_lockless_queue_push :: proc(queue: ^Processor_Lockless_Queue($T, $N), item: T) -> bool {
 	tail := sync.atomic_load(&queue.tail)
 	head := sync.atomic_load(&queue.head)
 
-	if (tail + 1) % 4096 == head {
+	if (tail + 1) % u32(N) == head {
 		return false // Full
 	}
 
 	queue.items[tail] = item
-	sync.atomic_store(&queue.tail, (tail + 1) % 4096)
+	sync.atomic_thread_fence(.Release) // Ensure item write is visible before tail update
+	sync.atomic_store(&queue.tail, (tail + 1) % u32(N))
 	return true
 }
 
 // processor_lockless_queue_try_pop removes an item from the queue (consumer side, multiple consumers)
-processor_lockless_queue_try_pop :: proc(queue: ^Processor_Lockless_Queue($T)) -> (item: T, ok: bool) {
+processor_lockless_queue_try_pop :: proc(queue: ^Processor_Lockless_Queue($T, $N)) -> (item: T, ok: bool) {
 	for {
 		head := sync.atomic_load(&queue.head)
 		tail := sync.atomic_load(&queue.tail)
@@ -77,24 +78,25 @@ processor_lockless_queue_try_pop :: proc(queue: ^Processor_Lockless_Queue($T)) -
 			return {}, false
 		}
 
-		item = queue.items[head]
-		new_head := (head + 1) % 4096
+		new_head := (head + 1) % u32(N)
 
 		_, swapped := sync.atomic_compare_exchange_weak(&queue.head, head, new_head)
 		if swapped {
+			sync.atomic_thread_fence(.Acquire) // Ensure we see the latest item data
+			item = queue.items[head]
 			return item, true
 		}
 	}
 }
 
 // Processor_Worker_Context holds the processor pointer for worker threads
-Processor_Worker_Context :: struct($P: typeid) {
-	processor: ^Processor(P),
+Processor_Worker_Context :: struct($P: typeid, $QueueSize: int) {
+	processor: ^Processor(P, QueueSize),
 }
 
 // processor_worker_thread_proc is the worker thread procedure
-processor_worker_thread_proc :: proc($P: typeid) -> proc(^Processor_Worker_Context(P)) {
-	worker_proc :: proc(ctx: ^Processor_Worker_Context(P)) {
+processor_worker_thread_proc :: proc($P: typeid, $QueueSize: int) -> proc(^Processor_Worker_Context(P, QueueSize)) {
+	worker_proc :: proc(ctx: ^Processor_Worker_Context(P, QueueSize)) {
 		p := ctx.processor
 		for !sync.atomic_load(&p.shutdown) {
 			work_item, ok := processor_lockless_queue_try_pop(&p.io_to_worker_queue)
@@ -126,23 +128,23 @@ processor_worker_thread_proc :: proc($P: typeid) -> proc(^Processor_Worker_Conte
 }
 
 // processor_init initializes the processor with the given number of workers and handler
-processor_init :: proc(p: ^Processor($P), num_workers: int, handler: P) {
-	p.io_to_worker_queue = processor_lockless_queue_init(Processor_Work_Item)
-	p.worker_to_io_queue = processor_lockless_queue_init(Processor_Work_Item)
+processor_init :: proc(p: ^Processor($P, $QueueSize), num_workers: int, handler: P) {
+	p.io_to_worker_queue = processor_lockless_queue_init(Processor_Work_Item, QueueSize)
+	p.worker_to_io_queue = processor_lockless_queue_init(Processor_Work_Item, QueueSize)
 	p.handler = handler
 	sync.atomic_store(&p.shutdown, false)
 	p.workers = make([dynamic]^thread.Thread, num_workers)
 
-	worker_fn := processor_worker_thread_proc(P)
+	worker_fn := processor_worker_thread_proc(P, QueueSize)
 	for i in 0..<num_workers {
-		ctx := new(Processor_Worker_Context(P))
+		ctx := new(Processor_Worker_Context(P, QueueSize))
 		ctx.processor = p
 		p.workers[i] = thread.create_and_start_with_poly_data(ctx, worker_fn)
 	}
 }
 
 // processor_enqueue_work sends data to worker threads for processing
-processor_enqueue_work :: proc(p: ^Processor($P), client_fd: linux.Fd, data: []u8, len: int) {
+processor_enqueue_work :: proc(p: ^Processor($P, $QueueSize), client_fd: linux.Fd, data: []u8, len: int) {
 	work_item := Processor_Work_Item {
 		fd   = client_fd,
 		data = data,
@@ -159,7 +161,7 @@ Drain_Response_Handler :: proc(work_item: Processor_Work_Item, user_data: rawptr
 
 // processor_drain_responses drains all pending responses from worker threads
 // Calls handler for each response item (close signal or data to write)
-processor_drain_responses :: proc(p: ^Processor($P), handler: Drain_Response_Handler, user_data: rawptr) {
+processor_drain_responses :: proc(p: ^Processor($P, $QueueSize), handler: Drain_Response_Handler, user_data: rawptr) {
 	for {
 		work_item, ok := processor_lockless_queue_try_pop(&p.worker_to_io_queue)
 		if !ok {
@@ -170,7 +172,7 @@ processor_drain_responses :: proc(p: ^Processor($P), handler: Drain_Response_Han
 }
 
 // processor_shutdown cleans up the processor resources
-processor_shutdown :: proc(p: ^Processor($P)) {
+processor_shutdown :: proc(p: ^Processor($P, $QueueSize)) {
 	sync.atomic_store(&p.shutdown, true)
 	for worker in p.workers {
 		thread.join(worker)

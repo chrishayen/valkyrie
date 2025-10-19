@@ -45,7 +45,7 @@ main :: proc() {
 	for num_workers in num_workers_tests {
 		handler := benchmark_handler_init(false)
 
-		p := new(valkyrie.Processor(Benchmark_Handler))
+		p := new(valkyrie.Processor(Benchmark_Handler, 2_097_152))
 		valkyrie.processor_init(p, num_workers, handler)
 
 		data := make([]u8, 64)
