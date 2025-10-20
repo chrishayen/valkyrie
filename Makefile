@@ -7,7 +7,7 @@ BENCHMARK_BINARY := benchmark_mechanics
 
 build:
 	@mkdir -p $(BUILD_DIR)
-	$(ODIN) build . -out:$(BUILD_DIR)/$(BINARY)
+	$(ODIN) build . -o:speed -out:$(BUILD_DIR)/$(BINARY)
 
 dev:
 	odin run . -- --tls --port 8443 --cert dev.crt --key dev.key
