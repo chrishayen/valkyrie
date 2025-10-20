@@ -108,7 +108,7 @@ main_reactor_init :: proc(
 		abs_key_path, key_ok := filepath.abs(key_path)
 
 		if !cert_ok || !key_ok {
-			fmt.eprintln("Failed to resolve certificate paths to absolute paths")
+			fmt.eprintln("Failed to resolve certificate")
 			return nil, false
 		}
 
