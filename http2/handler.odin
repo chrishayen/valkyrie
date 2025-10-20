@@ -87,15 +87,8 @@ response_encode :: proc(encoder: ^hpack.Encoder_Context, resp: ^Response, alloca
 
 // handle_request processes an HTTP/2 request and returns a response
 handle_request :: proc(req: ^Request, allocator := context.allocator) -> Response {
-	// Simple echo handler - returns information about the request
-	body_str := fmt.aprintf(
-		"HTTP/2 Request Received\n\nMethod: %s\nPath: %s\n\nRequest Body Length: %d bytes\n",
-		req.method,
-		req.path,
-		len(req.body),
-		allocator = allocator,
-	)
-	defer delete(body_str)
+	// Simple hello world handler
+	body_str := "Hello, world"
 
 	// Calculate actual content length
 	content_length_str := fmt.aprintf("%d", len(body_str), allocator = allocator)
