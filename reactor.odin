@@ -187,7 +187,6 @@ main_reactor_shutdown :: proc(mr: ^Main_Reactor) {
 
 // reactor_process_proc is the entry point for each reactor process
 reactor_process_proc :: proc(ctx: ^Reactor_Start_Context) {
-	fmt.printfln("[Reactor %d] Starting", ctx.process_id)
 
 	// Create reactor
 	reactor := Reactor {

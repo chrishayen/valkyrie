@@ -59,7 +59,7 @@ main :: proc() {
 	protocol := args.enable_tls ? "HTTPS" : "HTTP"
 	fmt.printfln("%s/2 server listening on %s:%d", protocol, args.host, args.port)
 	fmt.printfln("Max connections: %d", args.max_connections)
-	fmt.printfln("Reactors (pinned to CPU cores): %d", num_cores)
+	fmt.printfln("%d reactors", num_cores)
 	if args.enable_tls {
 		fmt.printfln("TLS enabled (cert: %s, key: %s)", args.cert_path, args.key_path)
 	}
