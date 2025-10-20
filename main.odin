@@ -15,7 +15,7 @@ SIG_IGN :: rawptr(uintptr(1))
 SIGPIPE :: c.int(13)
 
 // Constants
-DEFAULT_NUM_REACTORS :: 20
+DEFAULT_NUM_REACTORS :: 1
 
 main :: proc() {
 	// Parse command-line arguments
@@ -80,7 +80,9 @@ print_usage :: proc() {
 	fmt.println("  -h, --host <host>              Host to bind to (default: 0.0.0.0)")
 	fmt.println("  -p, --port <port>              Port to listen on (default: 8080)")
 	fmt.println("  -m, --max-connections <count>  Maximum concurrent connections (default: 1024)")
-	fmt.println("  -w, --workers <count>          Number of reactor threads (default: 20, one per CPU core)")
+	fmt.println(
+		"  -w, --workers <count>          Number of reactor threads (default: 1, one per CPU core)",
+	)
 	fmt.println("  --tls                          Enable TLS/HTTPS")
 	fmt.println(
 		"  --cert <path>                  Path to TLS certificate (default: certs/server.crt)",
@@ -90,3 +92,4 @@ print_usage :: proc() {
 	)
 	fmt.println("  --help                         Show this help message")
 }
+

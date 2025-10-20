@@ -322,6 +322,7 @@ reactor_set_affinity :: proc(reactor: ^Reactor) {
 			uintptr(&cpu_mask),
 		),
 	)
+
 	if result < 0 {
 		fmt.eprintfln("[Reactor %d] Failed to set CPU affinity", reactor.process_id)
 	}
