@@ -25,7 +25,7 @@ parse_args :: proc() -> Server_Args {
 		enable_tls      = false,
 		cert_path       = "",
 		key_path        = "",
-		num_workers     = DEFAULT_NUM_WORKERS,
+		num_workers     = DEFAULT_NUM_REACTORS,
 		show_help       = false,
 	}
 

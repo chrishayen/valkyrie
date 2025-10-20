@@ -4,6 +4,7 @@ import "core:c"
 import "core:fmt"
 import "core:os"
 import "core:strings"
+import "core:time"
 
 // TLS_Context holds s2n configuration
 TLS_Context :: struct {
@@ -13,6 +14,76 @@ TLS_Context :: struct {
 // TLS_Connection wraps an s2n connection
 TLS_Connection :: struct {
 	s2n_conn: ^s2n_connection,
+}
+
+// tls_global_init initializes the s2n library globally
+// This MUST be called exactly once before forking child processes
+tls_global_init :: proc() -> bool {
+	if s2n_init() != S2N_SUCCESS {
+		fmt.eprintln("Failed to initialize s2n-tls")
+		return false
+	}
+	return true
+}
+
+// tls_config_new creates a new TLS config without calling s2n_init()
+// This should be called in child processes after fork()
+tls_config_new :: proc(
+	cert_path: string,
+	key_path: string,
+	allocator := context.allocator,
+) -> (
+	ctx: TLS_Context,
+	ok: bool,
+) {
+	// Create config (do NOT call s2n_init() - parent already did)
+	config := s2n_config_new()
+	if config == nil {
+		fmt.eprintln("Failed to create s2n config")
+		return {}, false
+	}
+
+	// Read certificate and key files
+	cert_data, cert_ok := os.read_entire_file(cert_path, allocator)
+	if !cert_ok {
+		fmt.eprintfln("Failed to read certificate file: %s", cert_path)
+		s2n_config_free(config)
+		return {}, false
+	}
+	defer delete(cert_data, allocator)
+
+	key_data, key_ok := os.read_entire_file(key_path, allocator)
+	if !key_ok {
+		fmt.eprintfln("Failed to read key file: %s", key_path)
+		s2n_config_free(config)
+		return {}, false
+	}
+	defer delete(key_data, allocator)
+
+	// Convert to C strings (must be null-terminated)
+	cert_cstr := strings.clone_to_cstring(string(cert_data), allocator)
+	defer delete(cert_cstr, allocator)
+
+	key_cstr := strings.clone_to_cstring(string(key_data), allocator)
+	defer delete(key_cstr, allocator)
+
+	// Add certificate and key to config
+	if s2n_config_add_cert_chain_and_key(config, cert_cstr, key_cstr) != S2N_SUCCESS {
+		fmt.eprintln("Failed to add certificate and key to s2n config")
+		s2n_config_free(config)
+		return {}, false
+	}
+
+	// Set ALPN preferences for HTTP/2
+	protocols := [1]cstring{"h2"}
+	protocols_ptr := &protocols[0]
+	if s2n_config_set_protocol_preferences(config, protocols_ptr, 1) != S2N_SUCCESS {
+		fmt.eprintln("Failed to set ALPN protocol preferences")
+		s2n_config_free(config)
+		return {}, false
+	}
+
+	return TLS_Context{config = config}, true
 }
 
 // tls_init initializes the s2n library and creates a TLS context
@@ -130,12 +201,13 @@ tls_connection_free :: proc(tls_conn: ^TLS_Connection) {
 // TLS_Negotiate_Result represents the result of a TLS handshake attempt
 TLS_Negotiate_Result :: enum {
 	Success,
-	WouldBlock,
+	WouldBlock_Read, // Need to read more data
+	WouldBlock_Write, // Need to write data
 	Error,
 }
 
 // tls_negotiate performs the TLS handshake (non-blocking)
-// Returns Success if complete, WouldBlock if needs more I/O, Error on failure
+// Returns Success if complete, WouldBlock_Read/Write if needs more I/O, Error on failure
 tls_negotiate :: proc(tls_conn: ^TLS_Connection) -> TLS_Negotiate_Result {
 	if tls_conn.s2n_conn == nil {
 		return .Error
@@ -149,11 +221,19 @@ tls_negotiate :: proc(tls_conn: ^TLS_Connection) -> TLS_Negotiate_Result {
 	}
 
 	// Check if we need to retry
-	if blocked == .BLOCKED_ON_READ || blocked == .BLOCKED_ON_WRITE {
-		// Would block, need to retry later
-		return .WouldBlock
+	if blocked == .BLOCKED_ON_READ {
+		return .WouldBlock_Read
 	}
 
+	if blocked == .BLOCKED_ON_WRITE {
+		return .WouldBlock_Write
+	}
+
+	// Error case
+	errno := s2n_errno_location()^
+	error_msg := s2n_strerror(errno, "EN")
+	debug_msg := s2n_strerror_debug(errno, "EN")
+	fmt.eprintfln("[TLS] Handshake error: %s (debug: %s)", error_msg, debug_msg)
 	return .Error
 }
 
