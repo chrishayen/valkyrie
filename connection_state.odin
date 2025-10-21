@@ -414,7 +414,7 @@ read_tls :: proc(conn_ctx: ^Connection_Context) -> (data: []u8, ok: bool) {
 		return nil, false
 	}
 
-	temp_buf: [4096]u8
+	temp_buf: [16384]u8  // 16KB buffer for better performance
 	data_buf: [dynamic]u8
 
 	for {
@@ -437,7 +437,7 @@ read_tls :: proc(conn_ctx: ^Connection_Context) -> (data: []u8, ok: bool) {
 
 // read_plain reads all available data from a plain socket.
 read_plain :: proc(fd: linux.Fd) -> (data: []u8, ok: bool) {
-	temp_buf: [4096]u8
+	temp_buf: [16384]u8  // 16KB buffer for better performance
 	data_buf: [dynamic]u8
 
 	for {

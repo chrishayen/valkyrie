@@ -43,7 +43,7 @@ protocol_handler_init :: proc(is_server: bool, allocator := context.allocator) -
 		return {}, false
 	}
 
-	write_buffer := make([dynamic]byte, 0, 4096, allocator)
+	write_buffer := make([dynamic]byte, 0, 16384, allocator)  // 16KB initial capacity
 
 	return Protocol_Handler{
 		conn = conn,
