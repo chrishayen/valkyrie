@@ -39,6 +39,9 @@ foreign wolfssl {
 	wolfSSL_CTX_new :: proc(method: ^WOLFSSL_METHOD) -> ^WOLFSSL_CTX ---
 	wolfSSL_CTX_free :: proc(ctx: ^WOLFSSL_CTX) ---
 
+	// Cipher configuration
+	wolfSSL_CTX_set_cipher_list :: proc(ctx: ^WOLFSSL_CTX, list: cstring) -> c.int ---
+
 	// Certificate configuration
 	wolfSSL_CTX_use_certificate_file :: proc(
 		ctx: ^WOLFSSL_CTX,

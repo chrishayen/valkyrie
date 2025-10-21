@@ -72,10 +72,20 @@ tls_config_new :: proc(
 	}
 
 	// Enable session cache for performance
+	// Use NO_AUTO_CLEAR to avoid periodic cache flushes which can cause latency spikes
 	wolfSSL_CTX_set_session_cache_mode(
 		ssl_ctx,
 		SSL_SESS_CACHE_SERVER | SSL_SESS_CACHE_NO_AUTO_CLEAR,
 	)
+
+	// Set cipher list to prefer AES-GCM for hardware acceleration
+	// TLS 1.3 will automatically use the fastest available cipher
+	cipher_list := "TLS13-AES128-GCM-SHA256:TLS13-AES256-GCM-SHA384"
+	cipher_cstr := strings.clone_to_cstring(cipher_list, allocator)
+	defer delete(cipher_cstr, allocator)
+	if wolfSSL_CTX_set_cipher_list(ssl_ctx, cipher_cstr) != WOLFSSL_SUCCESS {
+		fmt.eprintln("Warning: Failed to set cipher list preferences")
+	}
 
 	return TLS_Context{ctx = ssl_ctx, cert_path = cert_path, key_path = key_path}, true
 }
@@ -131,10 +141,20 @@ tls_init :: proc(
 	}
 
 	// Enable session cache for performance
+	// Use NO_AUTO_CLEAR to avoid periodic cache flushes which can cause latency spikes
 	wolfSSL_CTX_set_session_cache_mode(
 		ssl_ctx,
 		SSL_SESS_CACHE_SERVER | SSL_SESS_CACHE_NO_AUTO_CLEAR,
 	)
+
+	// Set cipher list to prefer AES-GCM for hardware acceleration
+	// TLS 1.3 will automatically use the fastest available cipher
+	cipher_list := "TLS13-AES128-GCM-SHA256:TLS13-AES256-GCM-SHA384"
+	cipher_cstr := strings.clone_to_cstring(cipher_list, allocator)
+	defer delete(cipher_cstr, allocator)
+	if wolfSSL_CTX_set_cipher_list(ssl_ctx, cipher_cstr) != WOLFSSL_SUCCESS {
+		fmt.eprintln("Warning: Failed to set cipher list preferences")
+	}
 
 	return TLS_Context{ctx = ssl_ctx, cert_path = cert_path, key_path = key_path}, true
 }
