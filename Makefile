@@ -1,4 +1,4 @@
-.PHONY: build test install clean dev run-tls benchmark build-arm64
+.PHONY: build build-nix test install clean dev run-tls benchmark build-arm64
 
 ODIN := odin
 BUILD_DIR := build
@@ -6,6 +6,10 @@ BINARY := valkyrie
 BENCHMARK_BINARY := benchmark_mechanics
 
 build:
+	@mkdir -p $(BUILD_DIR)
+	$(ODIN) build . -o:speed -extra-linker-flags:"-static -Wl,--start-group -ls2n -lssl -lcrypto -Wl,--end-group" -out:$(BUILD_DIR)/$(BINARY)
+
+build-nix:
 	@mkdir -p $(BUILD_DIR)
 	$(ODIN) build . -o:speed -extra-linker-flags:"-static -Wl,--start-group -ls2n -lssl -lcrypto -Wl,--end-group" -out:$(BUILD_DIR)/$(BINARY)
 
