@@ -83,6 +83,17 @@ tls_config_new :: proc(
 		return {}, false
 	}
 
+	// Enable session resumption for performance
+	// Session tickets allow clients to resume TLS sessions without full handshake
+	if s2n_config_set_session_tickets_onoff(config, 1) != S2N_SUCCESS {
+		fmt.eprintln("Warning: Failed to enable session tickets")
+	}
+
+	// Enable session cache for additional resumption support
+	if s2n_config_set_session_cache_onoff(config, 1) != S2N_SUCCESS {
+		fmt.eprintln("Warning: Failed to enable session cache")
+	}
+
 	return TLS_Context{config = config}, true
 }
 
@@ -146,6 +157,17 @@ tls_init :: proc(
 		fmt.eprintln("Failed to set ALPN protocol preferences")
 		s2n_config_free(config)
 		return {}, false
+	}
+
+	// Enable session resumption for performance
+	// Session tickets allow clients to resume TLS sessions without full handshake
+	if s2n_config_set_session_tickets_onoff(config, 1) != S2N_SUCCESS {
+		fmt.eprintln("Warning: Failed to enable session tickets")
+	}
+
+	// Enable session cache for additional resumption support
+	if s2n_config_set_session_cache_onoff(config, 1) != S2N_SUCCESS {
+		fmt.eprintln("Warning: Failed to enable session cache")
 	}
 
 	return TLS_Context{config = config}, true

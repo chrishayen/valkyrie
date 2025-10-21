@@ -54,6 +54,17 @@ foreign s2n {
 		protocol_count: c.int,
 	) -> c.int ---
 
+	// Session resumption configuration
+	s2n_config_set_session_tickets_onoff :: proc(
+		config: ^s2n_config,
+		enabled: c.int,
+	) -> c.int ---
+
+	s2n_config_set_session_cache_onoff :: proc(
+		config: ^s2n_config,
+		enabled: c.int,
+	) -> c.int ---
+
 	// Connection management
 	s2n_connection_new :: proc(mode: s2n_mode) -> ^s2n_connection ---
 	s2n_connection_free :: proc(conn: ^s2n_connection) -> c.int ---
