@@ -1,8 +1,8 @@
 # Valkyrie
 
-A (maybe) high-performance HTTP/2 + TLS server written in Odin.
+A high-performance HTTP/2 + TLS server written in Odin.
 
-Currently achieves 1.5 million requests/second on Intel Core Ultra 7.
+Currently achieves **~10 million requests/second** on Intel Core Ultra 7 265F.
 
 ## Quickstart
 
@@ -71,8 +71,17 @@ openssl req -x509 -newkey rsa:4096 -keyout dev.key -out dev.crt -days 365 -nodes
 ## Performance
 
 Valkyrie achieves high throughput with minimal memory overhead:
-- 1.5 million requests/second on Intel Core Ultra 7
-- Only 12MB of memory per worker
+- **~10 million requests/second** on Intel Core Ultra 7 265F (20 cores)
+- Sub-millisecond mean latency under load
+- Zero failures across hundreds of millions of requests
+
+### Running Benchmarks
+
+```bash
+make benchmark-server
+```
+
+**Note:** This benchmark is configured for a 20-core CPU with 16 workers. Adjust the `--workers` parameter in the Makefile's `benchmark-server` target to match your CPU core count for optimal results.
 
 ### Benchmark Results
 

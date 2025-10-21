@@ -85,8 +85,45 @@ response_encode :: proc(encoder: ^hpack.Encoder_Context, resp: ^Response, alloca
 	return encoded, true
 }
 
+// Static response body - pre-allocated to avoid per-request allocations
+@(private = "file")
+STATIC_RESPONSE_BODY :: "Hello, World!"
+
+@(private = "file")
+STATIC_CONTENT_TYPE :: "text/plain"
+
+@(private = "file")
+STATIC_CONTENT_LENGTH :: "13"
+
 // handle_request processes an HTTP/2 request and returns a response
 handle_request :: proc(req: ^Request, allocator := context.allocator) -> Response {
+	// Build response headers with static values
+	headers := make([]hpack.Header, 2, allocator)
+
+	// Allocate copies of string literals so they can be freed properly
+	content_type_copy := make([]byte, len(STATIC_CONTENT_TYPE), allocator)
+	copy_from_string(content_type_copy, STATIC_CONTENT_TYPE)
+
+	content_length_copy := make([]byte, len(STATIC_CONTENT_LENGTH), allocator)
+	copy_from_string(content_length_copy, STATIC_CONTENT_LENGTH)
+
+	headers[0] = hpack.Header{name = "content-type", value = string(content_type_copy)}
+	headers[1] = hpack.Header{name = "content-length", value = string(content_length_copy)}
+
+	// Copy static body for response
+	body_bytes := make([]byte, len(STATIC_RESPONSE_BODY), allocator)
+	copy_from_string(body_bytes, STATIC_RESPONSE_BODY)
+
+	return Response{
+		status = 200,
+		headers = headers,
+		body = body_bytes,
+	}
+}
+
+// handle_request_dynamic processes an HTTP/2 request and returns a dynamic response
+// This version includes path information and demonstrates the allocation overhead
+handle_request_dynamic :: proc(req: ^Request, allocator := context.allocator) -> Response {
 	// Generate response body - echo the path and add padding to ensure non-trivial response size
 	// This allows flow control tests to properly test window exhaustion
 	body_str := fmt.aprintf("Hello, world! You requested: %s. This response body is padded to ensure it's large enough for flow control testing.", req.path, allocator = allocator)

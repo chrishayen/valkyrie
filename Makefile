@@ -45,6 +45,21 @@ benchmark-hpack:
 	@$(ODIN) build benchmarks/hpack/benchmark_hpack.odin -file -out:$(BUILD_DIR)/benchmark_hpack -o:speed
 	@$(BUILD_DIR)/benchmark_hpack
 
+benchmark-server:
+	@echo "Building server..."
+	@$(MAKE) build-dynamic > /dev/null
+	@echo "Killing any existing server..."
+	@killall -9 $(BINARY) 2>/dev/null || true
+	@sleep 1
+	@echo "Starting server with 16 workers..."
+	@setsid ./$(BUILD_DIR)/$(BINARY) --tls --cert dev.crt --key dev.key --port 8443 --workers 16 > /tmp/server.log 2>&1 < /dev/null &
+	@sleep 3
+	@echo "Running h2load benchmark (30s, 500 connections, 8 threads, 50 streams)..."
+	@h2load -n 5000000 -c 500 -t 8 -m 50 --duration 30s https://localhost:8443
+	@echo ""
+	@echo "Stopping server..."
+	@killall -9 $(BINARY) 2>/dev/null || true
+
 install: build
 	@cp $(BUILD_DIR)/$(BINARY) ~/bin/ 2>/dev/null || cp $(BUILD_DIR)/$(BINARY) /usr/local/bin/
 
