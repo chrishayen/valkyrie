@@ -18,6 +18,7 @@
         }).overrideAttrs (oldAttrs: {
           cmakeFlags = (oldAttrs.cmakeFlags or []) ++ [
             "-DBUILD_SHARED_LIBS=OFF"
+            "-DCMAKE_C_FLAGS=-march=armv8-a+crypto -O3"
           ];
         });
       in

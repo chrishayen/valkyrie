@@ -1,4 +1,4 @@
-.PHONY: build build-nix test install clean dev run-tls benchmark build-arm64
+.PHONY: build build-nix build-dynamic test install clean dev run-tls benchmark build-arm64
 
 ODIN := odin
 BUILD_DIR := build
@@ -12,6 +12,10 @@ build:
 build-nix:
 	@mkdir -p $(BUILD_DIR)
 	$(ODIN) build . -o:speed -extra-linker-flags:"-static -Wl,--start-group -ls2n -lssl -lcrypto -Wl,--end-group" -out:$(BUILD_DIR)/$(BINARY)
+
+build-dynamic:
+	@mkdir -p $(BUILD_DIR)
+	$(ODIN) build . -o:speed -extra-linker-flags:"-ls2n -lssl -lcrypto" -out:$(BUILD_DIR)/$(BINARY)
 
 build-arm64:
 	@mkdir -p $(BUILD_DIR)
