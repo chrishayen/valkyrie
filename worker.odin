@@ -191,6 +191,7 @@ event_loop :: proc(w: ^Worker, epoll_fd: linux.Fd, listen_conn: ^Connection, pro
 			// This is an event from our listener socket
 			// so accept the connection
 			if fd == listen_conn.fd {
+				log_debug("Listener event, accepting connections")
 				Accept(listen_conn, epoll_fd, &connections)
 				continue
 			}
@@ -199,19 +200,26 @@ event_loop :: proc(w: ^Worker, epoll_fd: linux.Fd, listen_conn: ^Connection, pro
 			// and process it
 			conn_ctx, found := connections[fd]
 			if !found {
+				log_debug("Event for unknown fd=%d", fd)
 				continue
 			}
 
+			log_debug("Event on fd=%d, is_tls=%v, handshake_state=%v", fd, conn_ctx.is_tls, conn_ctx.handshake_state)
+
 			// Handle TLS handshake if in progress
 			if conn_ctx.is_tls && conn_ctx.handshake_state == .Handshaking {
+				log_debug("Calling Handle_TLS_Handshake for fd=%d", fd)
 				if !Handle_TLS_Handshake(conn_ctx, epoll_fd, fd) {
+					log_debug("Handle_TLS_Handshake failed for fd=%d, closing", fd)
 					Close_Connection(epoll_fd, fd, &connections)
 					continue
 				}
 				// If handshake is still in progress, wait for more events
 				if conn_ctx.handshake_state != .Ready {
+					log_debug("Handshake still in progress for fd=%d", fd)
 					continue
 				}
+				log_debug("Handshake complete for fd=%d", fd)
 			}
 
 			// Read data from connection

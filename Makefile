@@ -7,14 +7,14 @@ BENCHMARK_BINARY := benchmark_mechanics
 
 build:
 	@mkdir -p $(BUILD_DIR)
-	$(ODIN) build . -o:speed -extra-linker-flags:"-static -lssl -lcrypto" -out:$(BUILD_DIR)/$(BINARY)
+	$(ODIN) build . -o:speed -extra-linker-flags:"-static -ls2n -lssl -lcrypto" -out:$(BUILD_DIR)/$(BINARY)
 
 build-arm64:
 	@mkdir -p $(BUILD_DIR)
-	$(ODIN) build . -o:speed -target:linux_arm64 -extra-linker-flags:"--target=aarch64-linux-gnu" -out:$(BUILD_DIR)/$(BINARY)-arm64
+	$(ODIN) build . -o:speed -target:linux_arm64 -extra-linker-flags:"--target=aarch64-linux-gnu -static -ls2n -lssl -lcrypto" -out:$(BUILD_DIR)/$(BINARY)-arm64
 
 dev:
-	odin run . -- --tls --port 8443 --cert dev.crt --key dev.key
+	odin run . -- --tls --port 8443 --cert dev.crt --key dev.key --log-level debug
 
 run-tls: build
 	$(BUILD_DIR)/$(BINARY) --tls --port 8443 --cert dev.crt --key dev.key

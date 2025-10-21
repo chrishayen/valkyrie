@@ -210,22 +210,28 @@ TLS_Negotiate_Result :: enum {
 // Returns Success if complete, WouldBlock_Read/Write if needs more I/O, Error on failure
 tls_negotiate :: proc(tls_conn: ^TLS_Connection) -> TLS_Negotiate_Result {
 	if tls_conn.s2n_conn == nil {
+		log_error("TLS negotiate: s2n_conn is nil")
 		return .Error
 	}
 
+	log_debug("TLS: Calling s2n_negotiate")
 	blocked: s2n_blocked_status
 	result := s2n_negotiate(tls_conn.s2n_conn, &blocked)
+	log_debug("TLS: s2n_negotiate returned: result=%d, blocked=%v", result, blocked)
 
 	if result == S2N_SUCCESS {
+		log_debug("TLS: Handshake SUCCESS")
 		return .Success
 	}
 
 	// Check if we need to retry
 	if blocked == .BLOCKED_ON_READ {
+		log_debug("TLS: Handshake blocked on READ")
 		return .WouldBlock_Read
 	}
 
 	if blocked == .BLOCKED_ON_WRITE {
+		log_debug("TLS: Handshake blocked on WRITE")
 		return .WouldBlock_Write
 	}
 
@@ -233,7 +239,7 @@ tls_negotiate :: proc(tls_conn: ^TLS_Connection) -> TLS_Negotiate_Result {
 	errno := s2n_errno_location()^
 	error_msg := s2n_strerror(errno, "EN")
 	debug_msg := s2n_strerror_debug(errno, "EN")
-	fmt.eprintfln("[TLS] Handshake error: %s (debug: %s)", error_msg, debug_msg)
+	log_error("TLS: Handshake error: %s (debug: %s)", error_msg, debug_msg)
 	return .Error
 }
 

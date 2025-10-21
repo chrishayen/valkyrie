@@ -26,6 +26,9 @@ main :: proc() {
 		return
 	}
 
+	// Set log level from arguments
+	set_log_level(args.log_level)
+
 	// Setup signal handler
 	signal(SIGPIPE, SIG_IGN)
 
@@ -93,6 +96,7 @@ print_usage :: proc() {
 	fmt.println(
 		"  --key <path>                   Path to TLS private key (default: certs/server.key)",
 	)
+	fmt.println("  --log-level <level>            Log level: debug, info, warn, error, none (default: info)")
 	fmt.println("  --help                         Show this help message")
 }
 

@@ -13,6 +13,7 @@ Server_Args :: struct {
 	cert_path:       string,
 	key_path:        string,
 	num_workers:     int,
+	log_level:       Log_Level,
 	show_help:       bool,
 }
 
@@ -26,6 +27,7 @@ parse_args :: proc() -> Server_Args {
 		cert_path       = "",
 		key_path        = "",
 		num_workers     = DEFAULT_NUM_REACTORS,
+		log_level       = .INFO,
 		show_help       = false,
 	}
 
@@ -74,6 +76,22 @@ parse_args :: proc() -> Server_Args {
 			if i + 1 < len(cmd_args) {
 				i += 1
 				args.key_path = cmd_args[i]
+			}
+		case "--log-level":
+			if i + 1 < len(cmd_args) {
+				i += 1
+				switch cmd_args[i] {
+				case "debug":
+					args.log_level = .DEBUG
+				case "info":
+					args.log_level = .INFO
+				case "warn":
+					args.log_level = .WARN
+				case "error":
+					args.log_level = .ERROR
+				case "none":
+					args.log_level = .NONE
+				}
 			}
 		case "--help":
 			args.show_help = true

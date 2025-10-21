@@ -240,25 +240,34 @@ Accept :: proc(listen_conn: ^Connection, epoll_fd: linux.Fd, connections: ^map[l
 			break
 		}
 
+		log_debug("Accepted connection on fd=%d", client_fd)
+
 		// Set non-blocking
 		flags, fcntl_err := linux.fcntl_getfl(client_fd, .GETFL)
 		if fcntl_err != .NONE {
+			log_error("Failed to get flags for fd=%d", client_fd)
 			linux.close(client_fd)
 			continue
 		}
 
 		fcntl_err = linux.fcntl_setfl(client_fd, .SETFL, flags + {.NONBLOCK})
 		if fcntl_err != .NONE {
+			log_error("Failed to set non-blocking for fd=%d", client_fd)
 			linux.close(client_fd)
 			continue
 		}
 
+		log_debug("Set fd=%d to non-blocking", client_fd)
+
 		// Create connection context for client
 		conn_ctx, ctx_ok := Init_Connection_Context(client_fd, listen_conn.is_tls, listen_conn.tls_ctx)
 		if !ctx_ok {
+			log_error("Failed to init connection context for fd=%d", client_fd)
 			linux.close(client_fd)
 			continue
 		}
+
+		log_debug("Created TLS connection context for fd=%d, is_tls=%v", client_fd, listen_conn.is_tls)
 
 		// Add client socket to epoll
 		client_event := linux.EPoll_Event {
@@ -267,6 +276,7 @@ Accept :: proc(listen_conn: ^Connection, epoll_fd: linux.Fd, connections: ^map[l
 		}
 		epoll_ctl_err := linux.epoll_ctl(epoll_fd, .ADD, client_fd, &client_event)
 		if epoll_ctl_err != .NONE {
+			log_error("Failed to add fd=%d to epoll", client_fd)
 			if conn_ctx.tls_conn != nil {
 				tls_connection_free(conn_ctx.tls_conn)
 				free(conn_ctx.tls_conn)
@@ -275,6 +285,8 @@ Accept :: proc(listen_conn: ^Connection, epoll_fd: linux.Fd, connections: ^map[l
 			free(conn_ctx)
 			continue
 		}
+
+		log_debug("Added fd=%d to epoll, waiting for data", client_fd)
 
 		// Store connection
 		connections[client_fd] = conn_ctx
