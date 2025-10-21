@@ -26,36 +26,15 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake libssl-dev
-
-      - name: Build and install s2n-tls
-        run: |
-          cd /tmp
-          git clone --depth 1 https://github.com/aws/s2n-tls.git
-          cd s2n-tls
-          cmake . -Bbuild \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX=/usr/local
-          cmake --build build -j $(nproc)
-          sudo cmake --install build
-
-      - name: Install Odin
-        run: |
-          cd /tmp
-          ODIN_VERSION=$(curl -s https://api.github.com/repos/odin-lang/Odin/releases/latest | grep 'tag_name' | cut -d '"' -f 4)
-          curl -L -o odin.tar.gz "https://github.com/odin-lang/Odin/releases/latest/download/odin-linux-${{ matrix.arch }}-${ODIN_VERSION}.tar.gz"
-          tar -xzf odin.tar.gz
-          sudo cp -r odin /opt/odin
-          sudo ln -s /opt/odin/odin /usr/local/bin/odin
-          odin version
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
 
       - name: Build
         run: |
           mkdir -p build
-          odin build . -o:speed -target:${{ matrix.odin_target }} -out:build/valkyrie_server-${{ matrix.arch }}
+          nix develop --command odin build . -o:speed -target:${{ matrix.odin_target }} -out:build/valkyrie_server-${{ matrix.arch }}
 
       - name: Verify binary
         run: |
