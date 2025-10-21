@@ -7,11 +7,11 @@ BENCHMARK_BINARY := benchmark_mechanics
 
 build:
 	@mkdir -p $(BUILD_DIR)
-	$(ODIN) build . -o:speed -extra-linker-flags:"-static -Wl,--start-group -ls2n -lssl -lcrypto -Wl,--end-group" -out:$(BUILD_DIR)/$(BINARY)
+	$(ODIN) build . -o:speed -extra-linker-flags:"-static -Wl,--start-group -ls2n -lssl -lcrypto -Wl,--end-group -ldl -lpthread" -out:$(BUILD_DIR)/$(BINARY)
 
 build-nix:
 	@mkdir -p $(BUILD_DIR)
-	$(ODIN) build . -o:speed -extra-linker-flags:"-static -Wl,--start-group -ls2n -lssl -lcrypto -Wl,--end-group" -out:$(BUILD_DIR)/$(BINARY)
+	$(ODIN) build . -o:speed -extra-linker-flags:"-static -Wl,--start-group -ls2n -lssl -lcrypto -Wl,--end-group -ldl -lpthread" -out:$(BUILD_DIR)/$(BINARY)
 
 build-dynamic:
 	@mkdir -p $(BUILD_DIR)
@@ -19,7 +19,7 @@ build-dynamic:
 
 build-arm64:
 	@mkdir -p $(BUILD_DIR)
-	$(ODIN) build . -o:speed -target:linux_arm64 -extra-linker-flags:"--target=aarch64-linux-gnu -static -Wl,--start-group -ls2n -lssl -lcrypto -Wl,--end-group" -out:$(BUILD_DIR)/$(BINARY)-arm64
+	$(ODIN) build . -o:speed -target:linux_arm64 -extra-linker-flags:"--target=aarch64-linux-gnu -static -Wl,--start-group -ls2n -lssl -lcrypto -Wl,--end-group -ldl -lpthread" -out:$(BUILD_DIR)/$(BINARY)-arm64
 
 dev:
 	odin run . -- --tls --port 8443 --cert dev.crt --key dev.key --log-level debug
