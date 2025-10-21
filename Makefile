@@ -7,11 +7,11 @@ BENCHMARK_BINARY := benchmark_mechanics
 
 build:
 	@mkdir -p $(BUILD_DIR)
-	$(ODIN) build . -o:speed -extra-linker-flags:"-static -Wl,--start-group -ls2n -lssl -lcrypto -Wl,--end-group -ldl -lpthread" -out:$(BUILD_DIR)/$(BINARY)
+	$(ODIN) build . -o:speed -extra-linker-flags:"-static -Wl,--start-group -ls2n -lssl -lcrypto -lssl -lcrypto -Wl,--end-group -ldl -lpthread" -out:$(BUILD_DIR)/$(BINARY)
 
 build-nix:
 	@mkdir -p $(BUILD_DIR)
-	$(ODIN) build . -o:speed -extra-linker-flags:"-static -Wl,--start-group -ls2n -lssl -lcrypto -Wl,--end-group -ldl -lpthread" -out:$(BUILD_DIR)/$(BINARY)
+	$(ODIN) build . -o:speed -extra-linker-flags:"-static -Wl,--start-group -ls2n -lssl -lcrypto -lssl -lcrypto -Wl,--end-group -ldl -lpthread" -out:$(BUILD_DIR)/$(BINARY)
 
 build-dynamic:
 	@mkdir -p $(BUILD_DIR)
