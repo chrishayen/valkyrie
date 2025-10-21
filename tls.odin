@@ -74,6 +74,12 @@ tls_config_new :: proc(
 		return {}, false
 	}
 
+	// Set cipher preferences to enable TLS 1.3
+	// "default_tls13" prefers TLS 1.3 with optimized cipher suites
+	if s2n_config_set_cipher_preferences(config, "default_tls13") != S2N_SUCCESS {
+		fmt.eprintln("Warning: Failed to set TLS 1.3 cipher preferences, using defaults")
+	}
+
 	// Set ALPN preferences for HTTP/2
 	protocols := [1]cstring{"h2"}
 	protocols_ptr := &protocols[0]
@@ -148,6 +154,12 @@ tls_init :: proc(
 		fmt.eprintln("Failed to add certificate and key to s2n config")
 		s2n_config_free(config)
 		return {}, false
+	}
+
+	// Set cipher preferences to enable TLS 1.3
+	// "default_tls13" prefers TLS 1.3 with optimized cipher suites
+	if s2n_config_set_cipher_preferences(config, "default_tls13") != S2N_SUCCESS {
+		fmt.eprintln("Warning: Failed to set TLS 1.3 cipher preferences, using defaults")
 	}
 
 	// Set ALPN preferences for HTTP/2

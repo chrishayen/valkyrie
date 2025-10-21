@@ -65,6 +65,12 @@ foreign s2n {
 		enabled: c.int,
 	) -> c.int ---
 
+	// Cipher preferences / security policy (includes TLS version preferences)
+	s2n_config_set_cipher_preferences :: proc(
+		config: ^s2n_config,
+		version: cstring,
+	) -> c.int ---
+
 	// Connection management
 	s2n_connection_new :: proc(mode: s2n_mode) -> ^s2n_connection ---
 	s2n_connection_free :: proc(conn: ^s2n_connection) -> c.int ---
