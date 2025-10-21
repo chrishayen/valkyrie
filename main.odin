@@ -30,9 +30,6 @@ main :: proc() {
 	// Set log level from arguments
 	set_log_level(args.log_level)
 
-	// Close stdin - server doesn't need it and prevents fd=0 from causing issues
-	os.close(os.stdin)
-
 	// Setup signal handler
 	signal(SIGPIPE, SIG_IGN)
 

@@ -173,7 +173,11 @@ run :: proc(using w: ^Worker, process_id: int, cpu_id: int) {
 
 // event_loop is the main event loop for handling connections.
 event_loop :: proc(w: ^Worker, epoll_fd: linux.Fd, listen_conn: ^Connection, process_id: int) {
-	events: [128]linux.EPoll_Event
+	when ODIN_ARCH == .arm64 {
+		events: [128]EPoll_Event_ARM64
+	} else {
+		events: [128]linux.EPoll_Event
+	}
 	connections := make(map[linux.Fd]^Connection_Context)
 	defer delete(connections)
 
