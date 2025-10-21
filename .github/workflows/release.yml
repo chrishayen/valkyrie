@@ -19,7 +19,7 @@ jobs:
             runner: ubuntu-latest
             odin_target: linux_amd64
           - arch: arm64
-            runner: ubuntu-24.04-arm64
+            runner: ubuntu-24.04-arm
             odin_target: linux_arm64
 
     steps:
