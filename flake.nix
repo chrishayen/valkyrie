@@ -13,36 +13,25 @@
 
         openssl-static = pkgs.openssl.override { static = true; };
 
-        # Shared wolfSSL configuration flags
-        wolfssl-base-flags = [
-          "--enable-static"
-          "--disable-shared"
-          "--enable-tls13"
-          "--enable-alpn"
-          "--enable-session-ticket"
-          "--enable-harden"
-          "--enable-extended-master"
-          "--enable-sp"
-          "--enable-sp-asm"
-          "--enable-aesgcm=table"
-          "--enable-context-extra-user-data"
-        ];
-
         # Architecture-specific wolfSSL builds
         wolfssl-static = pkgs.wolfssl.overrideAttrs (oldAttrs: {
-          configureFlags = (oldAttrs.configureFlags or []) ++ wolfssl-base-flags ++
-            (if pkgs.stdenv.isAarch64 then [
-              "--enable-armasm"
-            ] else if pkgs.stdenv.isx86_64 then [
-              "--enable-intelasm"
-              "--enable-aesni"
-            ] else []);
-          env = (oldAttrs.env or {}) // {
-            NIX_CFLAGS_COMPILE = (oldAttrs.env.NIX_CFLAGS_COMPILE or "") + " " +
-              (if pkgs.stdenv.isAarch64
-                then "-march=armv8-a+crypto -O3 -DTFM_TIMING_RESISTANT"
-                else "-march=native -O3 -DTFM_TIMING_RESISTANT");
-          };
+          configureFlags = [
+            "--enable-static"
+            "--disable-shared"
+            "--enable-tls13"
+            "--enable-alpn"
+            "--enable-session-ticket"
+            "--enable-harden"
+            "--enable-extended-master"
+            "--enable-sp"
+            "--enable-sp-asm"
+            "--enable-aesgcm=table"
+          ] ++ (if pkgs.stdenv.isAarch64 then [
+            "--enable-armasm"
+          ] else if pkgs.stdenv.isx86_64 then [
+            "--enable-intelasm"
+            "--enable-aesni"
+          ] else []);
         });
       in
       {
