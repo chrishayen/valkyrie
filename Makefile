@@ -1,4 +1,4 @@
-.PHONY: build test install clean dev run-tls benchmark
+.PHONY: build test install clean dev run-tls benchmark build-arm64
 
 ODIN := odin
 BUILD_DIR := build
@@ -8,6 +8,10 @@ BENCHMARK_BINARY := benchmark_mechanics
 build:
 	@mkdir -p $(BUILD_DIR)
 	$(ODIN) build . -o:speed -out:$(BUILD_DIR)/$(BINARY)
+
+build-arm64:
+	@mkdir -p $(BUILD_DIR)
+	$(ODIN) build . -o:speed -target:linux_arm64 -extra-linker-flags:"--target=aarch64-linux-gnu" -out:$(BUILD_DIR)/$(BINARY)-arm64
 
 dev:
 	odin run . -- --tls --port 8443 --cert dev.crt --key dev.key

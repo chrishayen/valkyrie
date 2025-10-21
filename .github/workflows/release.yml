@@ -1,0 +1,88 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            odin_target: linux_amd64
+          - arch: arm64
+            runner: ubuntu-24.04-arm64
+            odin_target: linux_arm64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libs2n-dev
+
+      - name: Install Odin
+        run: |
+          cd /tmp
+          git clone --depth 1 https://github.com/odin-lang/Odin
+          cd Odin
+          make
+          sudo cp odin /usr/local/bin/
+          odin version
+
+      - name: Build
+        run: |
+          mkdir -p build
+          odin build . -o:speed -target:${{ matrix.odin_target }} -out:build/valkyrie_server-${{ matrix.arch }}
+
+      - name: Verify binary
+        run: |
+          file build/valkyrie_server-${{ matrix.arch }}
+          ls -lh build/valkyrie_server-${{ matrix.arch }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: valkyrie_server-${{ matrix.arch }}
+          path: build/valkyrie_server-${{ matrix.arch }}
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download amd64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: valkyrie_server-amd64
+          path: ./artifacts
+
+      - name: Download arm64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: valkyrie_server-arm64
+          path: ./artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            artifacts/valkyrie_server-amd64
+            artifacts/valkyrie_server-arm64
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') || contains(github.ref_name, 'dev') }}
