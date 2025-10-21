@@ -100,7 +100,7 @@ Init_Connection_Context :: proc(
 		return nil, false
 	}
 
-	// Allocate on heap to maintain stable pointer for s2n
+	// Allocate on heap to maintain stable pointer for wolfSSL
 	conn_ctx.tls_conn = new(TLS_Connection)
 	conn_ctx.tls_conn^ = tls_conn
 

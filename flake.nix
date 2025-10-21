@@ -13,11 +13,16 @@
 
         openssl-static = pkgs.openssl.override { static = true; };
 
-        s2n-tls-static = (pkgs.s2n-tls.override {
-          openssl = openssl-static;
-        }).overrideAttrs (oldAttrs: {
-          cmakeFlags = (oldAttrs.cmakeFlags or []) ++ [
-            "-DBUILD_SHARED_LIBS=OFF"
+        wolfssl-static = pkgs.wolfssl.overrideAttrs (oldAttrs: {
+          configureFlags = (oldAttrs.configureFlags or []) ++ [
+            "--enable-static"
+            "--disable-shared"
+            "--enable-tls13"
+            "--enable-alpn"
+            "--enable-session-ticket"
+            "--enable-harden"
+            "--enable-extended-master"
+            "--enable-sp-math"
           ];
           NIX_CFLAGS_COMPILE = "-march=armv8-a+crypto -O3";
         });
@@ -26,7 +31,7 @@
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
             odin
-            s2n-tls-static
+            wolfssl-static
             openssl-static
             gnumake
             glibc.static

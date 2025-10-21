@@ -34,7 +34,7 @@ nix develop --command make test
 
 1. Install dependencies:
    - [Odin compiler](https://odin-lang.org/docs/install/)
-   - [s2n-tls](https://github.com/aws/s2n-tls)
+   - [wolfSSL](https://github.com/wolfSSL/wolfssl) with flags: `--enable-alpn --enable-tls13 --enable-session-ticket`
 
 2. Build:
    ```bash
