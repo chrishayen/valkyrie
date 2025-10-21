@@ -41,16 +41,15 @@ jobs:
           file build/valkyrie
           ls -lh build/valkyrie
 
-      - name: Create zip archive
+      - name: Create tar.gz archive
         run: |
-          cd build
-          zip valkyrie-${{ matrix.arch }}.zip valkyrie
+          tar czf build/valkyrie-${{ matrix.arch }}.tar.gz -C build valkyrie -C .. dev.crt dev.key
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: valkyrie-${{ matrix.arch }}
-          path: build/valkyrie-${{ matrix.arch }}.zip
+          path: build/valkyrie-${{ matrix.arch }}.tar.gz
 
   release:
     name: Create Release
@@ -77,8 +76,8 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            artifacts/valkyrie-amd64.zip
-            artifacts/valkyrie-arm64.zip
+            artifacts/valkyrie-amd64.tar.gz
+            artifacts/valkyrie-arm64.tar.gz
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') || contains(github.ref_name, 'dev') }}
