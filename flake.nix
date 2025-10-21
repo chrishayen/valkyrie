@@ -12,15 +12,12 @@
         pkgs = nixpkgs.legacyPackages.${system};
 
         openssl-static = pkgs.openssl.override { static = true; };
-
-        # Use default wolfssl with static override
-        wolfssl-static = pkgs.wolfssl.override { static = true; };
       in
       {
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
             odin
-            wolfssl-static
+            wolfssl
             openssl-static
             gnumake
             glibc.static
