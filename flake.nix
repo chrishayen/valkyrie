@@ -24,14 +24,13 @@
             "--enable-session-ticket"
             "--enable-harden"
             "--enable-extended-master"
-          ] ++ (if pkgs.stdenv.isAarch64 then [
-            "--enable-armasm"
-          ] else if pkgs.stdenv.isx86_64 then [
+          ] ++ (if pkgs.stdenv.isx86_64 then [
             "--enable-sp"
             "--enable-sp-asm"
             "--enable-intelasm"
             "--enable-aesni"
           ] else []);
+          # ARM assembly has compatibility issues in static builds, skip optimizations on ARM
         });
       in
       {
