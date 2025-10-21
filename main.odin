@@ -2,6 +2,7 @@ package valkyrie
 
 import "core:c"
 import "core:fmt"
+import "core:os"
 
 // Signal handling
 foreign import libc "system:c"
