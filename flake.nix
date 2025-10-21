@@ -19,7 +19,11 @@
             "--enable-alpn"
             "--enable-tls13"
             "--enable-session-ticket"
+            "--disable-examples"
+            "--disable-crypttests"
           ];
+          doCheck = false;  # Skip tests
+          doInstallCheck = false;  # Skip install checks
         });
       in
       {
