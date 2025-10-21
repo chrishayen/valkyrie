@@ -7,7 +7,7 @@ BENCHMARK_BINARY := benchmark_mechanics
 
 build:
 	@mkdir -p $(BUILD_DIR)
-	$(ODIN) build . -o:speed -out:$(BUILD_DIR)/$(BINARY)
+	$(ODIN) build . -o:speed -extra-linker-flags:"-static -lssl -lcrypto" -out:$(BUILD_DIR)/$(BINARY)
 
 build-arm64:
 	@mkdir -p $(BUILD_DIR)

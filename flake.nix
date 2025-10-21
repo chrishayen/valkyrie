@@ -10,12 +10,23 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
+
+        openssl-static = pkgs.openssl.override { static = true; };
+
+        s2n-tls-static = (pkgs.s2n-tls.override {
+          openssl = openssl-static;
+        }).overrideAttrs (oldAttrs: {
+          cmakeFlags = (oldAttrs.cmakeFlags or []) ++ [
+            "-DBUILD_SHARED_LIBS=OFF"
+          ];
+        });
       in
       {
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
             odin
-            s2n-tls
+            s2n-tls-static
+            openssl-static
             gnumake
           ];
 
