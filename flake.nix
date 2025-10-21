@@ -28,6 +28,7 @@
             s2n-tls-static
             openssl-static
             gnumake
+            glibc.static
           ];
 
           shellHook = ''
