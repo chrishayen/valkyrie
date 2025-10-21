@@ -25,7 +25,6 @@
             "--enable-extended-master"
             "--enable-sp"
             "--enable-sp-asm"
-            "--enable-aesgcm=table"
           ] ++ (if pkgs.stdenv.isAarch64 then [
             "--enable-armasm"
           ] else if pkgs.stdenv.isx86_64 then [
