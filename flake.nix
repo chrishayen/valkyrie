@@ -24,13 +24,14 @@
             "--enable-harden"
             "--enable-extended-master"
             "--enable-sp"
-            "--enable-sp-asm"
-            "--enable-aesgcm"
           ] ++ (if pkgs.stdenv.isAarch64 then [
             "--enable-armasm"
+            "--enable-aesgcm"
           ] else if pkgs.stdenv.isx86_64 then [
+            "--enable-sp-asm"
             "--enable-intelasm"
             "--enable-aesni"
+            "--enable-aesgcm"
           ] else []);
         });
       in
