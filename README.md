@@ -1,6 +1,74 @@
-A (mostly) Odin native HTTP/2 + TLS server. This is still a shitty first version so be nice about my code.
+# Valkyrie
 
-Currently 1.5 million requests / second on intel core ultra 7
+A (maybe) high-performance HTTP/2 + TLS server written in Odin.
+
+Currently achieves 1.5 million requests/second on Intel Core Ultra 7.
+
+## Quickstart
+
+Using Nix (recommended):
+
+```bash
+# Enter the development environment
+nix develop
+
+# Run the server with TLS
+make dev
+```
+
+The server will start on `https://localhost:8443`.
+
+## Building
+
+### With Nix (Recommended)
+
+```bash
+# Build the server
+nix develop --command make build
+
+# Run tests
+nix develop --command make test
+```
+
+### Manual Installation
+
+1. Install dependencies:
+   - [Odin compiler](https://odin-lang.org/docs/install/)
+   - [s2n-tls](https://github.com/aws/s2n-tls)
+
+2. Build:
+   ```bash
+   make build
+   ```
+
+3. Run tests:
+   ```bash
+   make test
+   ```
+
+## Running
+
+### Development Mode
+
+```bash
+make dev
+```
+
+Runs the server with TLS on port 8443 using the development certificate.
+
+### Production Mode
+
+```bash
+./build/http2_server --tls --port 8443 --cert /path/to/cert.crt --key /path/to/key.key
+```
+
+### Generate Development Certificates
+
+```bash
+openssl req -x509 -newkey rsa:4096 -keyout dev.key -out dev.crt -days 365 -nodes -subj "/CN=localhost"
+```
+
+## Performance
 
 ```
 valkyrie master  ? ❯ h2load -n 10000000 -c 500 -t 20 https://localhost:8443
