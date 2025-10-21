@@ -37,9 +37,12 @@
               "--enable-intelasm"
               "--enable-aesni"
             ] else []);
-          NIX_CFLAGS_COMPILE = if pkgs.stdenv.isAarch64
-            then "-march=armv8-a+crypto -O3 -DTFM_TIMING_RESISTANT"
-            else "-march=native -O3 -DTFM_TIMING_RESISTANT";
+          env = (oldAttrs.env or {}) // {
+            NIX_CFLAGS_COMPILE = (oldAttrs.env.NIX_CFLAGS_COMPILE or "") + " " +
+              (if pkgs.stdenv.isAarch64
+                then "-march=armv8-a+crypto -O3 -DTFM_TIMING_RESISTANT"
+                else "-march=native -O3 -DTFM_TIMING_RESISTANT");
+          };
         });
       in
       {
