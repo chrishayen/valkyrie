@@ -59,7 +59,7 @@ Runs the server with TLS on port 8443 using the development certificate.
 ### Production Mode
 
 ```bash
-./build/http2_server --tls --port 8443 --cert /path/to/cert.crt --key /path/to/key.key
+./build/valkyrie --tls --port 8443 --cert /path/to/cert.crt --key /path/to/key.key
 ```
 
 ### Generate Development Certificates
@@ -69,6 +69,12 @@ openssl req -x509 -newkey rsa:4096 -keyout dev.key -out dev.crt -days 365 -nodes
 ```
 
 ## Performance
+
+Valkyrie achieves high throughput with minimal memory overhead:
+- 1.5 million requests/second on Intel Core Ultra 7
+- Only 12MB of memory per worker
+
+### Benchmark Results
 
 ```
 valkyrie master  ? ❯ h2load -n 10000000 -c 500 -t 20 https://localhost:8443

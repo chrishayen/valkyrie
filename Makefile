@@ -2,7 +2,7 @@
 
 ODIN := odin
 BUILD_DIR := build
-BINARY := http2_server
+BINARY := valkyrie
 BENCHMARK_BINARY := benchmark_mechanics
 
 build:
