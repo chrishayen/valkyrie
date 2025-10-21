@@ -29,7 +29,18 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libs2n-dev
+          sudo apt-get install -y cmake libssl-dev
+
+      - name: Build and install s2n-tls
+        run: |
+          cd /tmp
+          git clone --depth 1 https://github.com/aws/s2n-tls.git
+          cd s2n-tls
+          cmake . -Bbuild \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/usr/local
+          cmake --build build -j $(nproc)
+          sudo cmake --install build
 
       - name: Install Odin
         run: |
