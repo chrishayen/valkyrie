@@ -15,6 +15,7 @@
 
         # Architecture-specific wolfSSL builds
         wolfssl-static = pkgs.wolfssl.overrideAttrs (oldAttrs: {
+          name = "wolfssl-optimized-5.8.2";
           configureFlags = [
             "--enable-static"
             "--disable-shared"
