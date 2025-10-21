@@ -191,7 +191,7 @@ event_loop :: proc(w: ^Worker, epoll_fd: linux.Fd, listen_conn: ^Connection, pro
 			// This is an event from our listener socket
 			// so accept the connection
 			if fd == listen_conn.fd {
-				log_debug("Listener event, accepting connections")
+				log_debug("Listener event on fd=%d, accepting connections", fd)
 				Accept(listen_conn, epoll_fd, &connections)
 				continue
 			}

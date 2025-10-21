@@ -225,6 +225,8 @@ Listen :: proc(
 	conn.fd = sock
 	conn.is_tls = enable_tls
 
+	log_debug("Listening socket created with fd=%d", sock)
+
 	return epoll, true
 }
 
