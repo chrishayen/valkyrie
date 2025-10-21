@@ -132,6 +132,7 @@ Listen :: proc(
 		fmt.eprintfln("[Worker %d] Failed to create epoll", process_id)
 		return 0, false
 	}
+	log_debug("Created epoll with fd=%d", epoll)
 
 	// ===== Create Socket =====
 	sock, sock_err := linux.socket(.INET, .STREAM, {.CLOEXEC, .NONBLOCK}, .TCP)
