@@ -1,11 +1,11 @@
 package valkyrie_tests
 
 import "core:testing"
-import http2 "../http2"
+import http "../http"
 
 @(test)
 test_write_frame_header :: proc(t: ^testing.T) {
-	header := http2.Frame_Header{
+	header := http.Frame_Header{
 		length = 6,
 		type = .DATA,
 		flags = 0x01,
@@ -15,8 +15,8 @@ test_write_frame_header :: proc(t: ^testing.T) {
 	buf := make([]u8, 100)
 	defer delete(buf)
 
-	written, err := http2.write_frame_header(buf, &header)
-	testing.expect_value(t, err, http2.Write_Error.None)
+	written, err := http.write_frame_header(buf, &header)
+	testing.expect_value(t, err, http.Write_Error.None)
 	testing.expect_value(t, written, 9)
 
 	// Verify bytes
@@ -31,8 +31,8 @@ test_write_frame_header :: proc(t: ^testing.T) {
 @(test)
 test_write_and_parse_data_frame :: proc(t: ^testing.T) {
 	// Create a DATA frame
-	original := http2.Data_Frame{
-		header = http2.Frame_Header{
+	original := http.Data_Frame{
+		header = http.Frame_Header{
 			length = 5,
 			type = .DATA,
 			flags = 0x01,  // END_STREAM
@@ -45,16 +45,16 @@ test_write_and_parse_data_frame :: proc(t: ^testing.T) {
 	buf := make([]u8, 100)
 	defer delete(buf)
 
-	written, write_err := http2.write_data_frame(buf, &original)
-	testing.expect_value(t, write_err, http2.Write_Error.None)
+	written, write_err := http.write_data_frame(buf, &original)
+	testing.expect_value(t, write_err, http.Write_Error.None)
 	testing.expect_value(t, written, 14)  // 9 header + 5 data
 
 	// Parse it back
-	header, _, parse_header_err := http2.parse_frame_header(buf)
-	testing.expect_value(t, parse_header_err, http2.Parse_Error.None)
+	header, _, parse_header_err := http.parse_frame_header(buf)
+	testing.expect_value(t, parse_header_err, http.Parse_Error.None)
 
-	parsed, parse_err := http2.parse_data_frame(header, buf[9:])
-	testing.expect_value(t, parse_err, http2.Parse_Error.None)
+	parsed, parse_err := http.parse_data_frame(header, buf[9:])
+	testing.expect_value(t, parse_err, http.Parse_Error.None)
 
 	// Verify round-trip
 	testing.expect_value(t, parsed.header.length, original.header.length)
@@ -67,8 +67,8 @@ test_write_and_parse_data_frame :: proc(t: ^testing.T) {
 @(test)
 test_write_and_parse_headers_frame :: proc(t: ^testing.T) {
 	// Create a HEADERS frame with priority
-	original := http2.Headers_Frame{
-		header = http2.Frame_Header{
+	original := http.Headers_Frame{
+		header = http.Frame_Header{
 			length = 9,
 			type = .HEADERS,
 			flags = 0x24,  // END_HEADERS | PRIORITY
@@ -83,13 +83,13 @@ test_write_and_parse_headers_frame :: proc(t: ^testing.T) {
 	buf := make([]u8, 100)
 	defer delete(buf)
 
-	written, write_err := http2.write_headers_frame(buf, &original)
-	testing.expect_value(t, write_err, http2.Write_Error.None)
+	written, write_err := http.write_headers_frame(buf, &original)
+	testing.expect_value(t, write_err, http.Write_Error.None)
 
 	// Parse it back
-	header, _, _ := http2.parse_frame_header(buf)
-	parsed, parse_err := http2.parse_headers_frame(header, buf[9:])
-	testing.expect_value(t, parse_err, http2.Parse_Error.None)
+	header, _, _ := http.parse_frame_header(buf)
+	parsed, parse_err := http.parse_headers_frame(header, buf[9:])
+	testing.expect_value(t, parse_err, http.Parse_Error.None)
 
 	// Verify round-trip
 	testing.expect(t, parsed.exclusive == original.exclusive)
@@ -100,8 +100,8 @@ test_write_and_parse_headers_frame :: proc(t: ^testing.T) {
 
 @(test)
 test_write_and_parse_priority_frame :: proc(t: ^testing.T) {
-	original := http2.Priority_Frame{
-		header = http2.Frame_Header{
+	original := http.Priority_Frame{
+		header = http.Frame_Header{
 			length = 5,
 			type = .PRIORITY,
 			flags = 0,
@@ -115,14 +115,14 @@ test_write_and_parse_priority_frame :: proc(t: ^testing.T) {
 	buf := make([]u8, 100)
 	defer delete(buf)
 
-	written, write_err := http2.write_priority_frame(buf, &original)
-	testing.expect_value(t, write_err, http2.Write_Error.None)
+	written, write_err := http.write_priority_frame(buf, &original)
+	testing.expect_value(t, write_err, http.Write_Error.None)
 	testing.expect_value(t, written, 14)  // 9 header + 5 payload
 
 	// Parse it back
-	header, _, _ := http2.parse_frame_header(buf)
-	parsed, parse_err := http2.parse_priority_frame(header, buf[9:])
-	testing.expect_value(t, parse_err, http2.Parse_Error.None)
+	header, _, _ := http.parse_frame_header(buf)
+	parsed, parse_err := http.parse_priority_frame(header, buf[9:])
+	testing.expect_value(t, parse_err, http.Parse_Error.None)
 
 	// Verify round-trip
 	testing.expect(t, parsed.exclusive == original.exclusive)
@@ -132,8 +132,8 @@ test_write_and_parse_priority_frame :: proc(t: ^testing.T) {
 
 @(test)
 test_write_and_parse_rst_stream_frame :: proc(t: ^testing.T) {
-	original := http2.Rst_Stream_Frame{
-		header = http2.Frame_Header{
+	original := http.Rst_Stream_Frame{
+		header = http.Frame_Header{
 			length = 4,
 			type = .RST_STREAM,
 			flags = 0,
@@ -145,14 +145,14 @@ test_write_and_parse_rst_stream_frame :: proc(t: ^testing.T) {
 	buf := make([]u8, 100)
 	defer delete(buf)
 
-	written, write_err := http2.write_rst_stream_frame(buf, &original)
-	testing.expect_value(t, write_err, http2.Write_Error.None)
+	written, write_err := http.write_rst_stream_frame(buf, &original)
+	testing.expect_value(t, write_err, http.Write_Error.None)
 	testing.expect_value(t, written, 13)  // 9 header + 4 error code
 
 	// Parse it back
-	header, _, _ := http2.parse_frame_header(buf)
-	parsed, parse_err := http2.parse_rst_stream_frame(header, buf[9:])
-	testing.expect_value(t, parse_err, http2.Parse_Error.None)
+	header, _, _ := http.parse_frame_header(buf)
+	parsed, parse_err := http.parse_rst_stream_frame(header, buf[9:])
+	testing.expect_value(t, parse_err, http.Parse_Error.None)
 
 	// Verify round-trip
 	testing.expect_value(t, parsed.error_code, original.error_code)
@@ -160,14 +160,14 @@ test_write_and_parse_rst_stream_frame :: proc(t: ^testing.T) {
 
 @(test)
 test_write_and_parse_settings_frame :: proc(t: ^testing.T) {
-	original := http2.Settings_Frame{
-		header = http2.Frame_Header{
+	original := http.Settings_Frame{
+		header = http.Frame_Header{
 			length = 12,
 			type = .SETTINGS,
 			flags = 0,
 			stream_id = 0,
 		},
-		settings = []http2.Setting{
+		settings = []http.Setting{
 			{id = .HEADER_TABLE_SIZE, value = 8192},
 			{id = .MAX_CONCURRENT_STREAMS, value = 100},
 		},
@@ -176,15 +176,15 @@ test_write_and_parse_settings_frame :: proc(t: ^testing.T) {
 	buf := make([]u8, 100)
 	defer delete(buf)
 
-	written, write_err := http2.write_settings_frame(buf, &original)
-	testing.expect_value(t, write_err, http2.Write_Error.None)
+	written, write_err := http.write_settings_frame(buf, &original)
+	testing.expect_value(t, write_err, http.Write_Error.None)
 	testing.expect_value(t, written, 21)  // 9 header + 12 settings
 
 	// Parse it back
-	header, _, _ := http2.parse_frame_header(buf)
-	parsed, parse_err := http2.parse_settings_frame(header, buf[9:])
+	header, _, _ := http.parse_frame_header(buf)
+	parsed, parse_err := http.parse_settings_frame(header, buf[9:])
 	defer delete(parsed.settings)
-	testing.expect_value(t, parse_err, http2.Parse_Error.None)
+	testing.expect_value(t, parse_err, http.Parse_Error.None)
 
 	// Verify round-trip
 	testing.expect_value(t, len(parsed.settings), len(original.settings))
@@ -196,8 +196,8 @@ test_write_and_parse_settings_frame :: proc(t: ^testing.T) {
 
 @(test)
 test_write_and_parse_ping_frame :: proc(t: ^testing.T) {
-	original := http2.Ping_Frame{
-		header = http2.Frame_Header{
+	original := http.Ping_Frame{
+		header = http.Frame_Header{
 			length = 8,
 			type = .PING,
 			flags = 0,
@@ -209,14 +209,14 @@ test_write_and_parse_ping_frame :: proc(t: ^testing.T) {
 	buf := make([]u8, 100)
 	defer delete(buf)
 
-	written, write_err := http2.write_ping_frame(buf, &original)
-	testing.expect_value(t, write_err, http2.Write_Error.None)
+	written, write_err := http.write_ping_frame(buf, &original)
+	testing.expect_value(t, write_err, http.Write_Error.None)
 	testing.expect_value(t, written, 17)  // 9 header + 8 data
 
 	// Parse it back
-	header, _, _ := http2.parse_frame_header(buf)
-	parsed, parse_err := http2.parse_ping_frame(header, buf[9:])
-	testing.expect_value(t, parse_err, http2.Parse_Error.None)
+	header, _, _ := http.parse_frame_header(buf)
+	parsed, parse_err := http.parse_ping_frame(header, buf[9:])
+	testing.expect_value(t, parse_err, http.Parse_Error.None)
 
 	// Verify round-trip
 	for i in 0..<8 {
@@ -226,8 +226,8 @@ test_write_and_parse_ping_frame :: proc(t: ^testing.T) {
 
 @(test)
 test_write_and_parse_goaway_frame :: proc(t: ^testing.T) {
-	original := http2.Goaway_Frame{
-		header = http2.Frame_Header{
+	original := http.Goaway_Frame{
+		header = http.Frame_Header{
 			length = 8,
 			type = .GOAWAY,
 			flags = 0,
@@ -240,14 +240,14 @@ test_write_and_parse_goaway_frame :: proc(t: ^testing.T) {
 	buf := make([]u8, 100)
 	defer delete(buf)
 
-	written, write_err := http2.write_goaway_frame(buf, &original)
-	testing.expect_value(t, write_err, http2.Write_Error.None)
+	written, write_err := http.write_goaway_frame(buf, &original)
+	testing.expect_value(t, write_err, http.Write_Error.None)
 	testing.expect_value(t, written, 17)  // 9 header + 8 (last_stream + error)
 
 	// Parse it back
-	header, _, _ := http2.parse_frame_header(buf)
-	parsed, parse_err := http2.parse_goaway_frame(header, buf[9:])
-	testing.expect_value(t, parse_err, http2.Parse_Error.None)
+	header, _, _ := http.parse_frame_header(buf)
+	parsed, parse_err := http.parse_goaway_frame(header, buf[9:])
+	testing.expect_value(t, parse_err, http.Parse_Error.None)
 
 	// Verify round-trip
 	testing.expect_value(t, parsed.last_stream_id, original.last_stream_id)
@@ -256,8 +256,8 @@ test_write_and_parse_goaway_frame :: proc(t: ^testing.T) {
 
 @(test)
 test_write_and_parse_window_update_frame :: proc(t: ^testing.T) {
-	original := http2.Window_Update_Frame{
-		header = http2.Frame_Header{
+	original := http.Window_Update_Frame{
+		header = http.Frame_Header{
 			length = 4,
 			type = .WINDOW_UPDATE,
 			flags = 0,
@@ -269,14 +269,14 @@ test_write_and_parse_window_update_frame :: proc(t: ^testing.T) {
 	buf := make([]u8, 100)
 	defer delete(buf)
 
-	written, write_err := http2.write_window_update_frame(buf, &original)
-	testing.expect_value(t, write_err, http2.Write_Error.None)
+	written, write_err := http.write_window_update_frame(buf, &original)
+	testing.expect_value(t, write_err, http.Write_Error.None)
 	testing.expect_value(t, written, 13)  // 9 header + 4 increment
 
 	// Parse it back
-	header, _, _ := http2.parse_frame_header(buf)
-	parsed, parse_err := http2.parse_window_update_frame(header, buf[9:])
-	testing.expect_value(t, parse_err, http2.Parse_Error.None)
+	header, _, _ := http.parse_frame_header(buf)
+	parsed, parse_err := http.parse_window_update_frame(header, buf[9:])
+	testing.expect_value(t, parse_err, http.Parse_Error.None)
 
 	// Verify round-trip
 	testing.expect_value(t, parsed.window_size_increment, original.window_size_increment)
@@ -284,8 +284,8 @@ test_write_and_parse_window_update_frame :: proc(t: ^testing.T) {
 
 @(test)
 test_write_and_parse_continuation_frame :: proc(t: ^testing.T) {
-	original := http2.Continuation_Frame{
-		header = http2.Frame_Header{
+	original := http.Continuation_Frame{
+		header = http.Frame_Header{
 			length = 5,
 			type = .CONTINUATION,
 			flags = 0x04,  // END_HEADERS
@@ -297,14 +297,14 @@ test_write_and_parse_continuation_frame :: proc(t: ^testing.T) {
 	buf := make([]u8, 100)
 	defer delete(buf)
 
-	written, write_err := http2.write_continuation_frame(buf, &original)
-	testing.expect_value(t, write_err, http2.Write_Error.None)
+	written, write_err := http.write_continuation_frame(buf, &original)
+	testing.expect_value(t, write_err, http.Write_Error.None)
 	testing.expect_value(t, written, 14)  // 9 header + 5 data
 
 	// Parse it back
-	header, _, _ := http2.parse_frame_header(buf)
-	parsed, parse_err := http2.parse_continuation_frame(header, buf[9:])
-	testing.expect_value(t, parse_err, http2.Parse_Error.None)
+	header, _, _ := http.parse_frame_header(buf)
+	parsed, parse_err := http.parse_continuation_frame(header, buf[9:])
+	testing.expect_value(t, parse_err, http.Parse_Error.None)
 
 	// Verify round-trip
 	testing.expect_value(t, len(parsed.header_block), len(original.header_block))
@@ -315,8 +315,8 @@ test_write_and_parse_continuation_frame :: proc(t: ^testing.T) {
 
 @(test)
 test_write_buffer_too_small :: proc(t: ^testing.T) {
-	frame := http2.Data_Frame{
-		header = http2.Frame_Header{
+	frame := http.Data_Frame{
+		header = http.Frame_Header{
 			length = 5,
 			type = .DATA,
 			flags = 0,
@@ -329,6 +329,6 @@ test_write_buffer_too_small :: proc(t: ^testing.T) {
 	small_buf := make([]u8, 5)
 	defer delete(small_buf)
 
-	_, err := http2.write_data_frame(small_buf, &frame)
-	testing.expect_value(t, err, http2.Write_Error.Buffer_Too_Small)
+	_, err := http.write_data_frame(small_buf, &frame)
+	testing.expect_value(t, err, http.Write_Error.Buffer_Too_Small)
 }

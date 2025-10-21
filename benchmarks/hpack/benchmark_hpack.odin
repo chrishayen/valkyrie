@@ -1,6 +1,6 @@
 package main
 
-import hpack "../../http2/hpack"
+import hpack "../../http/hpack"
 import "core:fmt"
 import "core:time"
 

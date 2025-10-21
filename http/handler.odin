@@ -1,4 +1,4 @@
-package http2
+package http
 
 import "core:fmt"
 import hpack "hpack"
@@ -87,8 +87,10 @@ response_encode :: proc(encoder: ^hpack.Encoder_Context, resp: ^Response, alloca
 
 // handle_request processes an HTTP/2 request and returns a response
 handle_request :: proc(req: ^Request, allocator := context.allocator) -> Response {
-	// Simple hello world handler
-	body_str := "Hello, world"
+	// Generate response body - echo the path and add padding to ensure non-trivial response size
+	// This allows flow control tests to properly test window exhaustion
+	body_str := fmt.aprintf("Hello, world! You requested: %s. This response body is padded to ensure it's large enough for flow control testing.", req.path, allocator = allocator)
+	defer delete(body_str)
 
 	// Calculate actual content length
 	content_length_str := fmt.aprintf("%d", len(body_str), allocator = allocator)

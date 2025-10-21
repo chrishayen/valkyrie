@@ -1,7 +1,7 @@
 package valkyrie_tests
 
 import "core:testing"
-import hpack "../http2/hpack"
+import hpack "../http/hpack"
 
 @(test)
 test_static_table_size :: proc(t: ^testing.T) {

@@ -1,4 +1,4 @@
-package http2
+package http
 
 // Write_Error represents errors that can occur during frame writing
 Write_Error :: enum {

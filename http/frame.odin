@@ -1,4 +1,4 @@
-package http2
+package http
 
 // Frame_Header represents the common 9-byte header for all HTTP/2 frames
 // RFC 9113 Section 4.1

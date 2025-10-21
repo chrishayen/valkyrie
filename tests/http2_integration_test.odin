@@ -2,8 +2,8 @@ package valkyrie_tests
 
 import "core:testing"
 import "core:fmt"
-import http2 "../http2"
-import hpack "../http2/hpack"
+import http "../http"
+import hpack "../http/hpack"
 
 // Helper to build a complete HTTP/2 connection preface + SETTINGS frame
 build_client_preface :: proc(allocator := context.allocator) -> []byte {
@@ -142,96 +142,96 @@ build_settings_ack :: proc(allocator := context.allocator) -> []byte {
 @(test)
 test_http2_basic_request_response :: proc(t: ^testing.T) {
 	// Create protocol handler
-	handler, handler_ok := http2.protocol_handler_init(true)
-	defer http2.protocol_handler_destroy(&handler)
+	handler, handler_ok := http.protocol_handler_init(true)
+	defer http.protocol_handler_destroy(&handler)
 	testing.expect(t, handler_ok, "Should create protocol handler")
 
 	// Send client preface + SETTINGS
 	preface := build_client_preface()
 	defer delete(preface)
 
-	ok := http2.protocol_handler_process_data(&handler, preface)
+	ok := http.protocol_handler_process_data(&handler, preface)
 	testing.expect(t, ok, "Should process client preface")
 
 	// Handler should send SETTINGS frame back
-	testing.expect(t, http2.protocol_handler_needs_write(&handler), "Should have SETTINGS to write")
+	testing.expect(t, http.protocol_handler_needs_write(&handler), "Should have SETTINGS to write")
 
 	// Consume server's SETTINGS response
-	write_data := http2.protocol_handler_get_write_data(&handler)
-	http2.protocol_handler_consume_write_data(&handler, len(write_data))
+	write_data := http.protocol_handler_get_write_data(&handler)
+	http.protocol_handler_consume_write_data(&handler, len(write_data))
 
 	// Send SETTINGS ACK from client
 	settings_ack := build_settings_ack()
 	defer delete(settings_ack)
 
-	ok = http2.protocol_handler_process_data(&handler, settings_ack)
+	ok = http.protocol_handler_process_data(&handler, settings_ack)
 	testing.expect(t, ok, "Should process SETTINGS ACK")
 
 	// Connection should now be active
-	testing.expect(t, http2.connection_is_active(&handler.conn), "Connection should be active")
+	testing.expect(t, http.connection_is_active(&handler.conn), "Connection should be active")
 
 	// Send HEADERS frame for GET request (stream 1)
 	headers_frame, headers_ok := build_headers_frame(1, "GET", "/", true)
 	defer delete(headers_frame)
 	testing.expect(t, headers_ok, "Should build HEADERS frame")
 
-	ok = http2.protocol_handler_process_data(&handler, headers_frame)
+	ok = http.protocol_handler_process_data(&handler, headers_frame)
 	testing.expect(t, ok, "Should process HEADERS frame")
 
 	// Should have response data to write
-	testing.expect(t, http2.protocol_handler_needs_write(&handler), "Should have response to write")
+	testing.expect(t, http.protocol_handler_needs_write(&handler), "Should have response to write")
 
 	// Verify we got HEADERS + DATA frames back
-	response_data := http2.protocol_handler_get_write_data(&handler)
+	response_data := http.protocol_handler_get_write_data(&handler)
 	testing.expect(t, len(response_data) > 18, "Should have at least frame headers")
 
 	// First frame should be HEADERS (type 0x01)
 	testing.expect(t, response_data[3] == 0x01, "First frame should be HEADERS")
 
 	// Stream should be closed after complete request/response
-	stream, found := http2.connection_get_stream(&handler.conn, 1)
+	stream, found := http.connection_get_stream(&handler.conn, 1)
 	testing.expect(t, !found, "Stream should be cleaned up after completion")
 }
 
 @(test)
 test_http2_request_with_body :: proc(t: ^testing.T) {
 	// Create protocol handler
-	handler, handler_ok := http2.protocol_handler_init(true)
-	defer http2.protocol_handler_destroy(&handler)
+	handler, handler_ok := http.protocol_handler_init(true)
+	defer http.protocol_handler_destroy(&handler)
 	testing.expect(t, handler_ok, "Should create protocol handler")
 
 	// Send client preface + SETTINGS
 	preface := build_client_preface()
 	defer delete(preface)
-	http2.protocol_handler_process_data(&handler, preface)
+	http.protocol_handler_process_data(&handler, preface)
 
 	// Consume server's SETTINGS
-	write_data := http2.protocol_handler_get_write_data(&handler)
-	http2.protocol_handler_consume_write_data(&handler, len(write_data))
+	write_data := http.protocol_handler_get_write_data(&handler)
+	http.protocol_handler_consume_write_data(&handler, len(write_data))
 
 	// Send SETTINGS ACK
 	settings_ack := build_settings_ack()
 	defer delete(settings_ack)
-	http2.protocol_handler_process_data(&handler, settings_ack)
+	http.protocol_handler_process_data(&handler, settings_ack)
 
 	// Send HEADERS frame for POST request WITHOUT end_stream (body follows)
 	headers_frame, headers_ok := build_headers_frame(1, "POST", "/upload", false)
 	defer delete(headers_frame)
 	testing.expect(t, headers_ok, "Should build HEADERS frame")
 
-	ok := http2.protocol_handler_process_data(&handler, headers_frame)
+	ok := http.protocol_handler_process_data(&handler, headers_frame)
 	testing.expect(t, ok, "Should process HEADERS frame")
 
 	// Stream should exist but not be closed yet
-	stream, found := http2.connection_get_stream(&handler.conn, 1)
+	stream, found := http.connection_get_stream(&handler.conn, 1)
 	testing.expect(t, found, "Stream should exist")
 	testing.expect(t, stream.state != .Closed, "Stream should not be closed yet")
 
 	// Should NOT have response yet (waiting for body)
 	// Clear any SETTINGS ACK that might be pending
-	if http2.protocol_handler_needs_write(&handler) {
-		write_data = http2.protocol_handler_get_write_data(&handler)
-		http2.protocol_handler_consume_write_data(&handler, len(write_data))
+	if http.protocol_handler_needs_write(&handler) {
+		write_data = http.protocol_handler_get_write_data(&handler)
+		http.protocol_handler_consume_write_data(&handler, len(write_data))
 	}
 
 	// Send DATA frame with body
@@ -239,14 +239,14 @@ test_http2_request_with_body :: proc(t: ^testing.T) {
 	data_frame := build_data_frame(1, body_data, true)
 	defer delete(data_frame)
 
-	ok = http2.protocol_handler_process_data(&handler, data_frame)
+	ok = http.protocol_handler_process_data(&handler, data_frame)
 	testing.expect(t, ok, "Should process DATA frame")
 
 	// Now should have response
-	testing.expect(t, http2.protocol_handler_needs_write(&handler), "Should have response after body")
+	testing.expect(t, http.protocol_handler_needs_write(&handler), "Should have response after body")
 
 	// Stream should be cleaned up after complete exchange
-	stream, found = http2.connection_get_stream(&handler.conn, 1)
+	stream, found = http.connection_get_stream(&handler.conn, 1)
 	testing.expect(t, !found, "Stream should be cleaned up")
 
 	// Verify flow control windows were updated
@@ -257,77 +257,77 @@ test_http2_request_with_body :: proc(t: ^testing.T) {
 @(test)
 test_http2_concurrent_streams :: proc(t: ^testing.T) {
 	// Create protocol handler
-	handler, handler_ok := http2.protocol_handler_init(true)
-	defer http2.protocol_handler_destroy(&handler)
+	handler, handler_ok := http.protocol_handler_init(true)
+	defer http.protocol_handler_destroy(&handler)
 	testing.expect(t, handler_ok, "Should create protocol handler")
 
 	// Setup connection
 	preface := build_client_preface()
 	defer delete(preface)
-	http2.protocol_handler_process_data(&handler, preface)
+	http.protocol_handler_process_data(&handler, preface)
 
-	write_data := http2.protocol_handler_get_write_data(&handler)
-	http2.protocol_handler_consume_write_data(&handler, len(write_data))
+	write_data := http.protocol_handler_get_write_data(&handler)
+	http.protocol_handler_consume_write_data(&handler, len(write_data))
 
 	settings_ack := build_settings_ack()
 	defer delete(settings_ack)
-	http2.protocol_handler_process_data(&handler, settings_ack)
+	http.protocol_handler_process_data(&handler, settings_ack)
 
 	// Send HEADERS for stream 1
 	headers1, _ := build_headers_frame(1, "GET", "/page1", false)
 	defer delete(headers1)
-	http2.protocol_handler_process_data(&handler, headers1)
+	http.protocol_handler_process_data(&handler, headers1)
 
 	// Send HEADERS for stream 3
 	headers3, _ := build_headers_frame(3, "GET", "/page2", false)
 	defer delete(headers3)
-	http2.protocol_handler_process_data(&handler, headers3)
+	http.protocol_handler_process_data(&handler, headers3)
 
 	// Send HEADERS for stream 5
 	headers5, _ := build_headers_frame(5, "GET", "/page3", false)
 	defer delete(headers5)
-	http2.protocol_handler_process_data(&handler, headers5)
+	http.protocol_handler_process_data(&handler, headers5)
 
 	// All three streams should exist
-	stream1, found1 := http2.connection_get_stream(&handler.conn, 1)
-	stream3, found3 := http2.connection_get_stream(&handler.conn, 3)
-	stream5, found5 := http2.connection_get_stream(&handler.conn, 5)
+	stream1, found1 := http.connection_get_stream(&handler.conn, 1)
+	stream3, found3 := http.connection_get_stream(&handler.conn, 3)
+	stream5, found5 := http.connection_get_stream(&handler.conn, 5)
 
 	testing.expect(t, found1, "Stream 1 should exist")
 	testing.expect(t, found3, "Stream 3 should exist")
 	testing.expect(t, found5, "Stream 5 should exist")
 
-	testing.expect(t, http2.connection_stream_count(&handler.conn) == 3, "Should have 3 concurrent streams")
+	testing.expect(t, http.connection_stream_count(&handler.conn) == 3, "Should have 3 concurrent streams")
 
 	// Complete stream 3 with DATA
 	data3 := build_data_frame(3, nil, true)
 	defer delete(data3)
-	http2.protocol_handler_process_data(&handler, data3)
+	http.protocol_handler_process_data(&handler, data3)
 
 	// Stream 3 should be cleaned up, others remain
-	_, found3 = http2.connection_get_stream(&handler.conn, 3)
+	_, found3 = http.connection_get_stream(&handler.conn, 3)
 	testing.expect(t, !found3, "Stream 3 should be cleaned up")
-	testing.expect(t, http2.connection_stream_count(&handler.conn) == 2, "Should have 2 streams left")
+	testing.expect(t, http.connection_stream_count(&handler.conn) == 2, "Should have 2 streams left")
 }
 
 @(test)
 test_http2_flow_control :: proc(t: ^testing.T) {
 	// Create protocol handler
-	handler, handler_ok := http2.protocol_handler_init(true)
-	defer http2.protocol_handler_destroy(&handler)
+	handler, handler_ok := http.protocol_handler_init(true)
+	defer http.protocol_handler_destroy(&handler)
 	testing.expect(t, handler_ok, "Should create protocol handler")
 
 	// Setup connection
 	preface := build_client_preface()
 	defer delete(preface)
-	http2.protocol_handler_process_data(&handler, preface)
+	http.protocol_handler_process_data(&handler, preface)
 
-	write_data := http2.protocol_handler_get_write_data(&handler)
-	http2.protocol_handler_consume_write_data(&handler, len(write_data))
+	write_data := http.protocol_handler_get_write_data(&handler)
+	http.protocol_handler_consume_write_data(&handler, len(write_data))
 
 	settings_ack := build_settings_ack()
 	defer delete(settings_ack)
-	http2.protocol_handler_process_data(&handler, settings_ack)
+	http.protocol_handler_process_data(&handler, settings_ack)
 
 	// Record initial window
 	initial_conn_window := handler.conn.connection_window
@@ -335,9 +335,9 @@ test_http2_flow_control :: proc(t: ^testing.T) {
 	// Send HEADERS for stream 1
 	headers, _ := build_headers_frame(1, "POST", "/data", false)
 	defer delete(headers)
-	http2.protocol_handler_process_data(&handler, headers)
+	http.protocol_handler_process_data(&handler, headers)
 
-	stream, _ := http2.connection_get_stream(&handler.conn, 1)
+	stream, _ := http.connection_get_stream(&handler.conn, 1)
 	initial_stream_window := stream.window_size
 
 	// Send 1KB of data
@@ -350,7 +350,7 @@ test_http2_flow_control :: proc(t: ^testing.T) {
 	data_frame := build_data_frame(1, large_data, true)
 	defer delete(data_frame)
 
-	ok := http2.protocol_handler_process_data(&handler, data_frame)
+	ok := http.protocol_handler_process_data(&handler, data_frame)
 	testing.expect(t, ok, "Should process large DATA frame")
 
 	// Check that windows were consumed
@@ -358,7 +358,7 @@ test_http2_flow_control :: proc(t: ^testing.T) {
 		"Connection window should decrease by data size")
 
 	// Stream should be cleaned up after END_STREAM
-	_, found := http2.connection_get_stream(&handler.conn, 1)
+	_, found := http.connection_get_stream(&handler.conn, 1)
 	testing.expect(t, !found, "Stream should be cleaned up")
 
 	// Note: WINDOW_UPDATE is only sent when window drops below 50% (32767 bytes)
@@ -369,33 +369,33 @@ test_http2_flow_control :: proc(t: ^testing.T) {
 @(test)
 test_http2_stream_error_handling :: proc(t: ^testing.T) {
 	// Create protocol handler
-	handler, handler_ok := http2.protocol_handler_init(true)
-	defer http2.protocol_handler_destroy(&handler)
+	handler, handler_ok := http.protocol_handler_init(true)
+	defer http.protocol_handler_destroy(&handler)
 	testing.expect(t, handler_ok, "Should create protocol handler")
 
 	// Setup connection
 	preface := build_client_preface()
 	defer delete(preface)
-	http2.protocol_handler_process_data(&handler, preface)
+	http.protocol_handler_process_data(&handler, preface)
 
-	write_data := http2.protocol_handler_get_write_data(&handler)
-	http2.protocol_handler_consume_write_data(&handler, len(write_data))
+	write_data := http.protocol_handler_get_write_data(&handler)
+	http.protocol_handler_consume_write_data(&handler, len(write_data))
 
 	settings_ack := build_settings_ack()
 	defer delete(settings_ack)
-	http2.protocol_handler_process_data(&handler, settings_ack)
+	http.protocol_handler_process_data(&handler, settings_ack)
 
 	// Try to send DATA frame on non-existent stream (should trigger RST_STREAM)
 	data_frame := build_data_frame(999, transmute([]byte)string("Invalid"), true)
 	defer delete(data_frame)
 
-	ok := http2.protocol_handler_process_data(&handler, data_frame)
+	ok := http.protocol_handler_process_data(&handler, data_frame)
 	testing.expect(t, ok, "Should handle error gracefully")
 
 	// Should have RST_STREAM frame to send
-	testing.expect(t, http2.protocol_handler_needs_write(&handler), "Should send RST_STREAM")
+	testing.expect(t, http.protocol_handler_needs_write(&handler), "Should send RST_STREAM")
 
-	response_data := http2.protocol_handler_get_write_data(&handler)
+	response_data := http.protocol_handler_get_write_data(&handler)
 	// RST_STREAM frame type is 0x03
 	testing.expect(t, response_data[3] == 0x03, "Should send RST_STREAM frame")
 }
@@ -403,38 +403,38 @@ test_http2_stream_error_handling :: proc(t: ^testing.T) {
 @(test)
 test_http2_connection_error_handling :: proc(t: ^testing.T) {
 	// Create protocol handler
-	handler, handler_ok := http2.protocol_handler_init(true)
-	defer http2.protocol_handler_destroy(&handler)
+	handler, handler_ok := http.protocol_handler_init(true)
+	defer http.protocol_handler_destroy(&handler)
 	testing.expect(t, handler_ok, "Should create protocol handler")
 
 	// Setup connection
 	preface := build_client_preface()
 	defer delete(preface)
-	http2.protocol_handler_process_data(&handler, preface)
+	http.protocol_handler_process_data(&handler, preface)
 
-	write_data := http2.protocol_handler_get_write_data(&handler)
-	http2.protocol_handler_consume_write_data(&handler, len(write_data))
+	write_data := http.protocol_handler_get_write_data(&handler)
+	http.protocol_handler_consume_write_data(&handler, len(write_data))
 
 	settings_ack := build_settings_ack()
 	defer delete(settings_ack)
-	http2.protocol_handler_process_data(&handler, settings_ack)
+	http.protocol_handler_process_data(&handler, settings_ack)
 
 	// Send DATA frame on stream 0 (invalid - should trigger GOAWAY)
 	data_frame := build_data_frame(0, transmute([]byte)string("Invalid"), true)
 	defer delete(data_frame)
 
-	ok := http2.protocol_handler_process_data(&handler, data_frame)
+	ok := http.protocol_handler_process_data(&handler, data_frame)
 	testing.expect(t, !ok, "Should reject connection-level protocol violation")
 
 	// Should have GOAWAY frame to send
-	testing.expect(t, http2.protocol_handler_needs_write(&handler), "Should send GOAWAY")
+	testing.expect(t, http.protocol_handler_needs_write(&handler), "Should send GOAWAY")
 
-	response_data := http2.protocol_handler_get_write_data(&handler)
+	response_data := http.protocol_handler_get_write_data(&handler)
 	// GOAWAY frame type is 0x07
 	testing.expect(t, response_data[3] == 0x07, "Should send GOAWAY frame")
 
 	// Connection should be marked as going away
-	testing.expect(t, http2.connection_is_closing(&handler.conn), "Connection should be going away")
+	testing.expect(t, http.connection_is_closing(&handler.conn), "Connection should be going away")
 }
 
 // Helper to build a HEADERS frame with optional END_HEADERS flag
@@ -504,21 +504,21 @@ build_continuation_frame :: proc(
 @(test)
 test_http2_continuation_basic :: proc(t: ^testing.T) {
 	// Create protocol handler
-	handler, handler_ok := http2.protocol_handler_init(true)
-	defer http2.protocol_handler_destroy(&handler)
+	handler, handler_ok := http.protocol_handler_init(true)
+	defer http.protocol_handler_destroy(&handler)
 	testing.expect(t, handler_ok, "Should create protocol handler")
 
 	// Setup connection
 	preface := build_client_preface()
 	defer delete(preface)
-	http2.protocol_handler_process_data(&handler, preface)
+	http.protocol_handler_process_data(&handler, preface)
 
-	write_data := http2.protocol_handler_get_write_data(&handler)
-	http2.protocol_handler_consume_write_data(&handler, len(write_data))
+	write_data := http.protocol_handler_get_write_data(&handler)
+	http.protocol_handler_consume_write_data(&handler, len(write_data))
 
 	settings_ack := build_settings_ack()
 	defer delete(settings_ack)
-	http2.protocol_handler_process_data(&handler, settings_ack)
+	http.protocol_handler_process_data(&handler, settings_ack)
 
 	// Create a complete header block using HPACK encoder
 	encoder, encoder_ok := hpack.encoder_init(4096, false)
@@ -545,7 +545,7 @@ test_http2_continuation_basic :: proc(t: ^testing.T) {
 	headers_frame := build_headers_frame_with_flags(1, fragment1, 0x01)  // END_STREAM, no END_HEADERS
 	defer delete(headers_frame)
 
-	ok := http2.protocol_handler_process_data(&handler, headers_frame)
+	ok := http.protocol_handler_process_data(&handler, headers_frame)
 	testing.expect(t, ok, "Should accept HEADERS without END_HEADERS")
 
 	// Connection should be expecting CONTINUATION
@@ -556,16 +556,16 @@ test_http2_continuation_basic :: proc(t: ^testing.T) {
 	continuation_frame := build_continuation_frame(1, fragment2, true)
 	defer delete(continuation_frame)
 
-	ok = http2.protocol_handler_process_data(&handler, continuation_frame)
+	ok = http.protocol_handler_process_data(&handler, continuation_frame)
 	testing.expect(t, ok, "Should accept CONTINUATION with END_HEADERS")
 
 	// Continuation state should be reset
 	testing.expect(t, !handler.conn.continuation_expected, "Should not be expecting CONTINUATION")
 
 	// Should have response to send
-	testing.expect(t, http2.protocol_handler_needs_write(&handler), "Should have response")
+	testing.expect(t, http.protocol_handler_needs_write(&handler), "Should have response")
 
-	response_data := http2.protocol_handler_get_write_data(&handler)
+	response_data := http.protocol_handler_get_write_data(&handler)
 	testing.expect(t, len(response_data) > 0, "Should have response data")
 	// Should be a HEADERS frame (type 0x01)
 	testing.expect(t, response_data[3] == 0x01, "Should send HEADERS response")
@@ -574,21 +574,21 @@ test_http2_continuation_basic :: proc(t: ^testing.T) {
 @(test)
 test_http2_continuation_interleaved_rejection :: proc(t: ^testing.T) {
 	// Create protocol handler
-	handler, handler_ok := http2.protocol_handler_init(true)
-	defer http2.protocol_handler_destroy(&handler)
+	handler, handler_ok := http.protocol_handler_init(true)
+	defer http.protocol_handler_destroy(&handler)
 	testing.expect(t, handler_ok, "Should create protocol handler")
 
 	// Setup connection
 	preface := build_client_preface()
 	defer delete(preface)
-	http2.protocol_handler_process_data(&handler, preface)
+	http.protocol_handler_process_data(&handler, preface)
 
-	write_data := http2.protocol_handler_get_write_data(&handler)
-	http2.protocol_handler_consume_write_data(&handler, len(write_data))
+	write_data := http.protocol_handler_get_write_data(&handler)
+	http.protocol_handler_consume_write_data(&handler, len(write_data))
 
 	settings_ack := build_settings_ack()
 	defer delete(settings_ack)
-	http2.protocol_handler_process_data(&handler, settings_ack)
+	http.protocol_handler_process_data(&handler, settings_ack)
 
 	// Create header block
 	encoder, encoder_ok := hpack.encoder_init(4096, false)
@@ -610,7 +610,7 @@ test_http2_continuation_interleaved_rejection :: proc(t: ^testing.T) {
 	headers_frame := build_headers_frame_with_flags(1, header_block, 0x00)  // No END_HEADERS, no END_STREAM
 	defer delete(headers_frame)
 
-	ok := http2.protocol_handler_process_data(&handler, headers_frame)
+	ok := http.protocol_handler_process_data(&handler, headers_frame)
 	testing.expect(t, ok, "Should accept HEADERS without END_HEADERS")
 	testing.expect(t, handler.conn.continuation_expected, "Should be expecting CONTINUATION")
 
@@ -618,31 +618,31 @@ test_http2_continuation_interleaved_rejection :: proc(t: ^testing.T) {
 	data_frame := build_data_frame(1, transmute([]byte)string("test"), true)
 	defer delete(data_frame)
 
-	ok = http2.protocol_handler_process_data(&handler, data_frame)
+	ok = http.protocol_handler_process_data(&handler, data_frame)
 	testing.expect(t, !ok, "Should reject interleaved DATA frame")
 
 	// Should send GOAWAY
-	testing.expect(t, http2.connection_is_closing(&handler.conn), "Connection should be going away")
+	testing.expect(t, http.connection_is_closing(&handler.conn), "Connection should be going away")
 }
 
 @(test)
 test_http2_continuation_wrong_stream :: proc(t: ^testing.T) {
 	// Create protocol handler
-	handler, handler_ok := http2.protocol_handler_init(true)
-	defer http2.protocol_handler_destroy(&handler)
+	handler, handler_ok := http.protocol_handler_init(true)
+	defer http.protocol_handler_destroy(&handler)
 	testing.expect(t, handler_ok, "Should create protocol handler")
 
 	// Setup connection
 	preface := build_client_preface()
 	defer delete(preface)
-	http2.protocol_handler_process_data(&handler, preface)
+	http.protocol_handler_process_data(&handler, preface)
 
-	write_data := http2.protocol_handler_get_write_data(&handler)
-	http2.protocol_handler_consume_write_data(&handler, len(write_data))
+	write_data := http.protocol_handler_get_write_data(&handler)
+	http.protocol_handler_consume_write_data(&handler, len(write_data))
 
 	settings_ack := build_settings_ack()
 	defer delete(settings_ack)
-	http2.protocol_handler_process_data(&handler, settings_ack)
+	http.protocol_handler_process_data(&handler, settings_ack)
 
 	// Create header block
 	encoder, encoder_ok := hpack.encoder_init(4096, false)
@@ -664,7 +664,7 @@ test_http2_continuation_wrong_stream :: proc(t: ^testing.T) {
 	headers_frame := build_headers_frame_with_flags(1, header_block, 0x00)
 	defer delete(headers_frame)
 
-	ok := http2.protocol_handler_process_data(&handler, headers_frame)
+	ok := http.protocol_handler_process_data(&handler, headers_frame)
 	testing.expect(t, ok, "Should accept HEADERS without END_HEADERS")
 	testing.expect(t, handler.conn.continuation_stream_id == 1, "Should expect CONTINUATION on stream 1")
 
@@ -672,31 +672,31 @@ test_http2_continuation_wrong_stream :: proc(t: ^testing.T) {
 	continuation_frame := build_continuation_frame(3, header_block, true)
 	defer delete(continuation_frame)
 
-	ok = http2.protocol_handler_process_data(&handler, continuation_frame)
+	ok = http.protocol_handler_process_data(&handler, continuation_frame)
 	testing.expect(t, !ok, "Should reject CONTINUATION on wrong stream")
 
 	// Should send GOAWAY
-	testing.expect(t, http2.connection_is_closing(&handler.conn), "Connection should be going away")
+	testing.expect(t, http.connection_is_closing(&handler.conn), "Connection should be going away")
 }
 
 @(test)
 test_http2_continuation_multiple_fragments :: proc(t: ^testing.T) {
 	// Create protocol handler
-	handler, handler_ok := http2.protocol_handler_init(true)
-	defer http2.protocol_handler_destroy(&handler)
+	handler, handler_ok := http.protocol_handler_init(true)
+	defer http.protocol_handler_destroy(&handler)
 	testing.expect(t, handler_ok, "Should create protocol handler")
 
 	// Setup connection
 	preface := build_client_preface()
 	defer delete(preface)
-	http2.protocol_handler_process_data(&handler, preface)
+	http.protocol_handler_process_data(&handler, preface)
 
-	write_data := http2.protocol_handler_get_write_data(&handler)
-	http2.protocol_handler_consume_write_data(&handler, len(write_data))
+	write_data := http.protocol_handler_get_write_data(&handler)
+	http.protocol_handler_consume_write_data(&handler, len(write_data))
 
 	settings_ack := build_settings_ack()
 	defer delete(settings_ack)
-	http2.protocol_handler_process_data(&handler, settings_ack)
+	http.protocol_handler_process_data(&handler, settings_ack)
 
 	// Create a large header block
 	encoder, encoder_ok := hpack.encoder_init(4096, false)
@@ -728,7 +728,7 @@ test_http2_continuation_multiple_fragments :: proc(t: ^testing.T) {
 	headers_frame := build_headers_frame_with_flags(1, fragment1, 0x00)
 	defer delete(headers_frame)
 
-	ok := http2.protocol_handler_process_data(&handler, headers_frame)
+	ok := http.protocol_handler_process_data(&handler, headers_frame)
 	testing.expect(t, ok, "Should accept HEADERS without END_HEADERS")
 	testing.expect(t, handler.conn.continuation_expected, "Should be expecting CONTINUATION")
 
@@ -736,7 +736,7 @@ test_http2_continuation_multiple_fragments :: proc(t: ^testing.T) {
 	cont1 := build_continuation_frame(1, fragment2, false)
 	defer delete(cont1)
 
-	ok = http2.protocol_handler_process_data(&handler, cont1)
+	ok = http.protocol_handler_process_data(&handler, cont1)
 	testing.expect(t, ok, "Should accept CONTINUATION without END_HEADERS")
 	testing.expect(t, handler.conn.continuation_expected, "Should still be expecting CONTINUATION")
 
@@ -744,12 +744,12 @@ test_http2_continuation_multiple_fragments :: proc(t: ^testing.T) {
 	cont2 := build_continuation_frame(1, fragment3, true)
 	defer delete(cont2)
 
-	ok = http2.protocol_handler_process_data(&handler, cont2)
+	ok = http.protocol_handler_process_data(&handler, cont2)
 	testing.expect(t, ok, "Should accept final CONTINUATION with END_HEADERS")
 	testing.expect(t, !handler.conn.continuation_expected, "Should not be expecting CONTINUATION")
 
 	// Stream should exist and have headers complete
-	stream, found := http2.connection_get_stream(&handler.conn, 1)
+	stream, found := http.connection_get_stream(&handler.conn, 1)
 	testing.expect(t, found, "Stream 1 should exist")
 	testing.expect(t, stream.recv_headers_complete, "Headers should be complete")
 }
@@ -757,21 +757,21 @@ test_http2_continuation_multiple_fragments :: proc(t: ^testing.T) {
 @(test)
 test_http2_streaming_large_response :: proc(t: ^testing.T) {
 	// Create protocol handler
-	handler, handler_ok := http2.protocol_handler_init(true)
-	defer http2.protocol_handler_destroy(&handler)
+	handler, handler_ok := http.protocol_handler_init(true)
+	defer http.protocol_handler_destroy(&handler)
 	testing.expect(t, handler_ok, "Should create protocol handler")
 
 	// Setup connection
 	preface := build_client_preface()
 	defer delete(preface)
-	http2.protocol_handler_process_data(&handler, preface)
+	http.protocol_handler_process_data(&handler, preface)
 
-	write_data := http2.protocol_handler_get_write_data(&handler)
-	http2.protocol_handler_consume_write_data(&handler, len(write_data))
+	write_data := http.protocol_handler_get_write_data(&handler)
+	http.protocol_handler_consume_write_data(&handler, len(write_data))
 
 	settings_ack := build_settings_ack()
 	defer delete(settings_ack)
-	http2.protocol_handler_process_data(&handler, settings_ack)
+	http.protocol_handler_process_data(&handler, settings_ack)
 
 	// Record initial remote windows
 	initial_conn_window := handler.conn.remote_connection_window
@@ -781,12 +781,12 @@ test_http2_streaming_large_response :: proc(t: ^testing.T) {
 	testing.expect(t, ok, "Should build headers frame")
 	defer delete(headers_frame)
 
-	http2.protocol_handler_process_data(&handler, headers_frame)
+	http.protocol_handler_process_data(&handler, headers_frame)
 
 	// Should have response
-	testing.expect(t, http2.protocol_handler_needs_write(&handler), "Should have response")
+	testing.expect(t, http.protocol_handler_needs_write(&handler), "Should have response")
 
-	response_data := http2.protocol_handler_get_write_data(&handler)
+	response_data := http.protocol_handler_get_write_data(&handler)
 	testing.expect(t, len(response_data) > 0, "Should have response data")
 
 	// Parse response frames
@@ -828,24 +828,24 @@ test_http2_streaming_large_response :: proc(t: ^testing.T) {
 @(test)
 test_http2_flow_control_limits_response :: proc(t: ^testing.T) {
 	// Create protocol handler
-	handler, handler_ok := http2.protocol_handler_init(true)
-	defer http2.protocol_handler_destroy(&handler)
+	handler, handler_ok := http.protocol_handler_init(true)
+	defer http.protocol_handler_destroy(&handler)
 	testing.expect(t, handler_ok, "Should create protocol handler")
 
 	// Setup connection
 	preface := build_client_preface()
 	defer delete(preface)
-	http2.protocol_handler_process_data(&handler, preface)
+	http.protocol_handler_process_data(&handler, preface)
 
-	write_data := http2.protocol_handler_get_write_data(&handler)
-	http2.protocol_handler_consume_write_data(&handler, len(write_data))
+	write_data := http.protocol_handler_get_write_data(&handler)
+	http.protocol_handler_consume_write_data(&handler, len(write_data))
 
 	settings_ack := build_settings_ack()
 	defer delete(settings_ack)
-	http2.protocol_handler_process_data(&handler, settings_ack)
+	http.protocol_handler_process_data(&handler, settings_ack)
 
 	// Reduce remote windows to simulate limited capacity
-	stream, _ := http2.connection_create_stream(&handler.conn, 1)
+	stream, _ := http.connection_create_stream(&handler.conn, 1)
 	stream.remote_window_size = 1000  // Only 1KB available
 	handler.conn.remote_connection_window = 1000
 
@@ -854,12 +854,12 @@ test_http2_flow_control_limits_response :: proc(t: ^testing.T) {
 	testing.expect(t, ok, "Should build headers frame")
 	defer delete(headers_frame)
 
-	http2.protocol_handler_process_data(&handler, headers_frame)
+	http.protocol_handler_process_data(&handler, headers_frame)
 
 	// Should have response
-	testing.expect(t, http2.protocol_handler_needs_write(&handler), "Should have response")
+	testing.expect(t, http.protocol_handler_needs_write(&handler), "Should have response")
 
-	response_data := http2.protocol_handler_get_write_data(&handler)
+	response_data := http.protocol_handler_get_write_data(&handler)
 
 	// Count DATA bytes sent
 	offset := 0
@@ -889,24 +889,24 @@ test_http2_flow_control_limits_response :: proc(t: ^testing.T) {
 @(test)
 test_http2_multiple_data_frames :: proc(t: ^testing.T) {
 	// Create protocol handler
-	handler, handler_ok := http2.protocol_handler_init(true)
-	defer http2.protocol_handler_destroy(&handler)
+	handler, handler_ok := http.protocol_handler_init(true)
+	defer http.protocol_handler_destroy(&handler)
 	testing.expect(t, handler_ok, "Should create protocol handler")
 
 	// Setup connection
 	preface := build_client_preface()
 	defer delete(preface)
-	http2.protocol_handler_process_data(&handler, preface)
+	http.protocol_handler_process_data(&handler, preface)
 
-	write_data := http2.protocol_handler_get_write_data(&handler)
-	http2.protocol_handler_consume_write_data(&handler, len(write_data))
+	write_data := http.protocol_handler_get_write_data(&handler)
+	http.protocol_handler_consume_write_data(&handler, len(write_data))
 
 	settings_ack := build_settings_ack()
 	defer delete(settings_ack)
-	http2.protocol_handler_process_data(&handler, settings_ack)
+	http.protocol_handler_process_data(&handler, settings_ack)
 
 	// Create stream and set a small window to force multiple DATA frames
-	stream, _ := http2.connection_create_stream(&handler.conn, 1)
+	stream, _ := http.connection_create_stream(&handler.conn, 1)
 	stream.remote_window_size = 50  // Very small window
 	handler.conn.remote_connection_window = 200
 
@@ -915,10 +915,10 @@ test_http2_multiple_data_frames :: proc(t: ^testing.T) {
 	testing.expect(t, ok, "Should build headers frame")
 	defer delete(headers_frame)
 
-	http2.protocol_handler_process_data(&handler, headers_frame)
+	http.protocol_handler_process_data(&handler, headers_frame)
 
 	// Should have response
-	response_data := http2.protocol_handler_get_write_data(&handler)
+	response_data := http.protocol_handler_get_write_data(&handler)
 
 	// Count DATA frames
 	offset := 0
@@ -981,24 +981,24 @@ build_window_update_frame :: proc(
 @(test)
 test_http2_window_update_resumes_send :: proc(t: ^testing.T) {
 	// Create protocol handler
-	handler, handler_ok := http2.protocol_handler_init(true)
-	defer http2.protocol_handler_destroy(&handler)
+	handler, handler_ok := http.protocol_handler_init(true)
+	defer http.protocol_handler_destroy(&handler)
 	testing.expect(t, handler_ok, "Should create protocol handler")
 
 	// Setup connection
 	preface := build_client_preface()
 	defer delete(preface)
-	http2.protocol_handler_process_data(&handler, preface)
+	http.protocol_handler_process_data(&handler, preface)
 
-	write_data := http2.protocol_handler_get_write_data(&handler)
-	http2.protocol_handler_consume_write_data(&handler, len(write_data))
+	write_data := http.protocol_handler_get_write_data(&handler)
+	http.protocol_handler_consume_write_data(&handler, len(write_data))
 
 	settings_ack := build_settings_ack()
 	defer delete(settings_ack)
-	http2.protocol_handler_process_data(&handler, settings_ack)
+	http.protocol_handler_process_data(&handler, settings_ack)
 
 	// Create stream with very limited window to force queueing
-	stream, _ := http2.connection_create_stream(&handler.conn, 1)
+	stream, _ := http.connection_create_stream(&handler.conn, 1)
 	stream.remote_window_size = 40  // Very small - will queue most of response
 	handler.conn.remote_connection_window = 1000  // Connection has room
 
@@ -1007,10 +1007,10 @@ test_http2_window_update_resumes_send :: proc(t: ^testing.T) {
 	testing.expect(t, ok, "Should build headers frame")
 	defer delete(headers_frame)
 
-	http2.protocol_handler_process_data(&handler, headers_frame)
+	http.protocol_handler_process_data(&handler, headers_frame)
 
 	// Should have initial response (up to 40 bytes)
-	response_data := http2.protocol_handler_get_write_data(&handler)
+	response_data := http.protocol_handler_get_write_data(&handler)
 
 	// Count initial DATA sent
 	offset := 0
@@ -1037,23 +1037,23 @@ test_http2_window_update_resumes_send :: proc(t: ^testing.T) {
 	testing.expect(t, initial_data_bytes > 0, "Should send some initial data")
 
 	// Verify data is queued
-	stream_after, _ := http2.connection_get_stream(&handler.conn, 1)
+	stream_after, _ := http.connection_get_stream(&handler.conn, 1)
 	testing.expect(t, stream_after.pending_send_data != nil, "Should have queued data")
 	testing.expect(t, len(stream_after.pending_send_data) > 0, "Should have non-empty queue")
 
 	// Consume initial response
-	http2.protocol_handler_consume_write_data(&handler, len(response_data))
+	http.protocol_handler_consume_write_data(&handler, len(response_data))
 
 	// Send WINDOW_UPDATE to give more window space
 	window_update := build_window_update_frame(1, 100)  // Add 100 bytes to stream window
 	defer delete(window_update)
 
-	http2.protocol_handler_process_data(&handler, window_update)
+	http.protocol_handler_process_data(&handler, window_update)
 
 	// Should now have more data to send
-	testing.expect(t, http2.protocol_handler_needs_write(&handler), "Should have more data after WINDOW_UPDATE")
+	testing.expect(t, http.protocol_handler_needs_write(&handler), "Should have more data after WINDOW_UPDATE")
 
-	resumed_data := http2.protocol_handler_get_write_data(&handler)
+	resumed_data := http.protocol_handler_get_write_data(&handler)
 	testing.expect(t, len(resumed_data) > 0, "Should have resumed data")
 
 	// Count resumed DATA frames
@@ -1084,7 +1084,7 @@ test_http2_window_update_resumes_send :: proc(t: ^testing.T) {
 	testing.expect(t, end_stream_found, "Should eventually send END_STREAM")
 
 	// Verify queue is now empty
-	stream_final, _ := http2.connection_get_stream(&handler.conn, 1)
+	stream_final, _ := http.connection_get_stream(&handler.conn, 1)
 	if stream_final.pending_send_data != nil {
 		testing.expect(t, len(stream_final.pending_send_data) == 0, "Queue should be empty after sending all data")
 	}

@@ -2,7 +2,7 @@ package valkyrie_tests
 
 import "core:testing"
 import "core:slice"
-import hpack "../http2/hpack"
+import hpack "../http/hpack"
 
 // Test encoding/decoding small values that fit in prefix
 @(test)

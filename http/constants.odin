@@ -1,4 +1,4 @@
-package http2
+package http
 
 // HTTP/2 Frame Types (RFC 9113 Section 6)
 Frame_Type :: enum u8 {

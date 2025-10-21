@@ -3,7 +3,7 @@ package valkyrie_tests
 import "core:testing"
 import "core:slice"
 import "core:fmt"
-import hpack "../http2/hpack"
+import hpack "../http/hpack"
 
 @(test)
 test_huffman_table_size :: proc(t: ^testing.T) {

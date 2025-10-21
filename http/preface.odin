@@ -1,4 +1,4 @@
-package http2
+package http
 
 // preface_validate checks if the given bytes match the HTTP/2 connection preface
 preface_validate :: proc(data: []byte) -> (valid: bool, bytes_needed: int) {

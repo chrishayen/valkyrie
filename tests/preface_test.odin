@@ -1,7 +1,7 @@
 package valkyrie_tests
 
 import "core:testing"
-import http2 "../http2"
+import http "../http"
 
 @(test)
 test_preface_valid :: proc(t: ^testing.T) {
@@ -12,7 +12,7 @@ test_preface_valid :: proc(t: ^testing.T) {
 		0x0d, 0x0a, 0x53, 0x4d, 0x0d, 0x0a, 0x0d, 0x0a,
 	}
 
-	valid, bytes_needed := http2.preface_validate(data)
+	valid, bytes_needed := http.preface_validate(data)
 	testing.expect(t, valid == true, "Should validate valid preface")
 	testing.expect(t, bytes_needed == 0, "Should not need more bytes")
 }
@@ -25,7 +25,7 @@ test_preface_incomplete :: proc(t: ^testing.T) {
 		0x54, 0x50,
 	}
 
-	valid, bytes_needed := http2.preface_validate(data)
+	valid, bytes_needed := http.preface_validate(data)
 	testing.expect(t, valid == false, "Should not validate incomplete preface")
 	testing.expect(t, bytes_needed == 14, "Should need 14 more bytes")
 }
@@ -39,7 +39,7 @@ test_preface_invalid :: proc(t: ^testing.T) {
 		0x0a, 0x0d, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00,
 	}
 
-	valid, bytes_needed := http2.preface_validate(data)
+	valid, bytes_needed := http.preface_validate(data)
 	testing.expect(t, valid == false, "Should not validate invalid preface")
 	testing.expect(t, bytes_needed == 0, "Should not need more bytes (it's invalid)")
 }
@@ -54,7 +54,7 @@ test_preface_with_extra_data :: proc(t: ^testing.T) {
 		0x00, 0x00, 0x00, 0x00,  // Extra bytes (start of SETTINGS frame)
 	}
 
-	valid, bytes_needed := http2.preface_validate(data)
+	valid, bytes_needed := http.preface_validate(data)
 	testing.expect(t, valid == true, "Should validate preface even with extra data")
 	testing.expect(t, bytes_needed == 0, "Should not need more bytes")
 }
@@ -63,13 +63,13 @@ test_preface_with_extra_data :: proc(t: ^testing.T) {
 test_preface_empty :: proc(t: ^testing.T) {
 	data := []byte{}
 
-	valid, bytes_needed := http2.preface_validate(data)
+	valid, bytes_needed := http.preface_validate(data)
 	testing.expect(t, valid == false, "Should not validate empty data")
 	testing.expect(t, bytes_needed == 24, "Should need all 24 bytes")
 }
 
 @(test)
 test_preface_length :: proc(t: ^testing.T) {
-	length := http2.preface_bytes_consumed()
+	length := http.preface_bytes_consumed()
 	testing.expect(t, length == 24, "Preface should be 24 bytes")
 }

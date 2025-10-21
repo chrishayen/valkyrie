@@ -38,35 +38,38 @@ main :: proc() {
 		}
 	}
 
-	// Determine number of reactor processes
-	num_cores := args.num_workers > 0 ? args.num_workers : DEFAULT_NUM_REACTORS
+	// Determine number of worker processes
+	num_workers := args.num_workers > 0 ? args.num_workers : DEFAULT_NUM_REACTORS
 
-	// Initialize main reactor
-	main_reactor, ok := main_reactor_init(
+	// Initialize worker
+	worker, ok := Worker_Init(
 		args.host,
 		args.port,
 		args.enable_tls,
 		args.cert_path,
 		args.key_path,
-		num_cores,
 	)
 	if !ok {
-		fmt.eprintln("Failed to initialize main reactor")
+		fmt.eprintln("Failed to initialize worker")
 		return
 	}
-	defer main_reactor_shutdown(main_reactor)
+	defer shutdown(worker)
 
 	protocol := args.enable_tls ? "HTTPS" : "HTTP"
 	fmt.printfln("%s/2 server listening on %s:%d", protocol, args.host, args.port)
 	fmt.printfln("Max connections: %d", args.max_connections)
-	fmt.printfln("%d reactors", num_cores)
+	fmt.printfln("%d workers", num_workers)
 	if args.enable_tls {
 		fmt.printfln("TLS enabled (cert: %s, key: %s)", args.cert_path, args.key_path)
 	}
 	fmt.println("Press Ctrl+C to stop...")
 
-	// Run the server (forks children and waits for signal)
-	main_reactor_run(main_reactor)
+	// Run the server
+	if num_workers > 1 {
+		Worker_Run_With_Forks(worker, num_workers)
+	} else {
+		Worker_Run(worker)
+	}
 }
 
 // print_usage displays usage information

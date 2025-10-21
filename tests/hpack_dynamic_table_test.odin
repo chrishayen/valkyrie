@@ -1,7 +1,7 @@
 package valkyrie_tests
 
 import "core:testing"
-import hpack "../http2/hpack"
+import hpack "../http/hpack"
 
 @(test)
 test_dynamic_table_init :: proc(t: ^testing.T) {
