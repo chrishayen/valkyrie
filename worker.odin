@@ -182,7 +182,15 @@ event_loop :: proc(w: ^Worker, epoll_fd: linux.Fd, listen_conn: ^Connection, pro
 	defer delete(connections)
 
 	for !global_shutdown {
-		nfds, wait_err := linux.epoll_wait(epoll_fd, raw_data(events[:]), 128, 1000)
+		nfds: i32
+		wait_err: linux.Errno
+
+		when ODIN_ARCH == .arm64 {
+			nfds, wait_err = linux.epoll_wait(epoll_fd, cast([^]linux.EPoll_Event)raw_data(events[:]), 128, 1000)
+		} else {
+			nfds, wait_err = linux.epoll_wait(epoll_fd, raw_data(events[:]), 128, 1000)
+		}
+
 		if wait_err != .NONE {
 			continue
 		}

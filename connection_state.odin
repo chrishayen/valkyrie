@@ -210,11 +210,19 @@ Listen :: proc(
 	}
 
 	// ===== Add to Epoll =====
-	event := linux.EPoll_Event {
-		events = {.IN},
-		data = linux.EPoll_Data{fd = sock},
+	when ODIN_ARCH == .arm64 {
+		event := EPoll_Event_ARM64 {
+			events = {.IN},
+			data = linux.EPoll_Data{fd = sock},
+		}
+		epoll_add_err := linux.epoll_ctl(epoll, .ADD, sock, cast(^linux.EPoll_Event)&event)
+	} else {
+		event := linux.EPoll_Event {
+			events = {.IN},
+			data = linux.EPoll_Data{fd = sock},
+		}
+		epoll_add_err := linux.epoll_ctl(epoll, .ADD, sock, &event)
 	}
-	epoll_add_err := linux.epoll_ctl(epoll, .ADD, sock, &event)
 	if epoll_add_err != .NONE {
 		fmt.eprintfln("[Worker %d] Failed to add listen socket to epoll", process_id)
 		linux.close(sock)
@@ -273,11 +281,19 @@ Accept :: proc(listen_conn: ^Connection, epoll_fd: linux.Fd, connections: ^map[l
 		log_debug("Created TLS connection context for fd=%d, is_tls=%v", client_fd, listen_conn.is_tls)
 
 		// Add client socket to epoll
-		client_event := linux.EPoll_Event {
-			events = {.IN},
-			data = linux.EPoll_Data{fd = client_fd},
+		when ODIN_ARCH == .arm64 {
+			client_event := EPoll_Event_ARM64 {
+				events = {.IN},
+				data = linux.EPoll_Data{fd = client_fd},
+			}
+			epoll_ctl_err := linux.epoll_ctl(epoll_fd, .ADD, client_fd, cast(^linux.EPoll_Event)&client_event)
+		} else {
+			client_event := linux.EPoll_Event {
+				events = {.IN},
+				data = linux.EPoll_Data{fd = client_fd},
+			}
+			epoll_ctl_err := linux.epoll_ctl(epoll_fd, .ADD, client_fd, &client_event)
 		}
-		epoll_ctl_err := linux.epoll_ctl(epoll_fd, .ADD, client_fd, &client_event)
 		if epoll_ctl_err != .NONE {
 			log_error("Failed to add fd=%d to epoll", client_fd)
 			if conn_ctx.tls_conn != nil {
@@ -318,11 +334,19 @@ Handle_TLS_Handshake :: proc(
 		conn_ctx.handshake_state = .Ready
 
 		// After handshake, switch epoll to read-only events
-		event := linux.EPoll_Event {
-			events = {.IN},
-			data = linux.EPoll_Data{fd = fd},
+		when ODIN_ARCH == .arm64 {
+			event := EPoll_Event_ARM64 {
+				events = {.IN},
+				data = linux.EPoll_Data{fd = fd},
+			}
+			linux.epoll_ctl(epoll_fd, .MOD, fd, cast(^linux.EPoll_Event)&event)
+		} else {
+			event := linux.EPoll_Event {
+				events = {.IN},
+				data = linux.EPoll_Data{fd = fd},
+			}
+			linux.epoll_ctl(epoll_fd, .MOD, fd, &event)
 		}
-		linux.epoll_ctl(epoll_fd, .MOD, fd, &event)
 
 		// Initialize HTTP/2 handler now that TLS is ready
 		handler, handler_ok := http.protocol_handler_init(true)
@@ -334,20 +358,36 @@ Handle_TLS_Handshake :: proc(
 
 	case .WouldBlock_Read:
 		// Need more data to read - ensure we're watching for read events
-		event := linux.EPoll_Event {
-			events = {.IN},
-			data = linux.EPoll_Data{fd = fd},
+		when ODIN_ARCH == .arm64 {
+			event := EPoll_Event_ARM64 {
+				events = {.IN},
+				data = linux.EPoll_Data{fd = fd},
+			}
+			linux.epoll_ctl(epoll_fd, .MOD, fd, cast(^linux.EPoll_Event)&event)
+		} else {
+			event := linux.EPoll_Event {
+				events = {.IN},
+				data = linux.EPoll_Data{fd = fd},
+			}
+			linux.epoll_ctl(epoll_fd, .MOD, fd, &event)
 		}
-		linux.epoll_ctl(epoll_fd, .MOD, fd, &event)
 		return true
 
 	case .WouldBlock_Write:
 		// Need to write data - watch for write events
-		event := linux.EPoll_Event {
-			events = {.OUT},
-			data = linux.EPoll_Data{fd = fd},
+		when ODIN_ARCH == .arm64 {
+			event := EPoll_Event_ARM64 {
+				events = {.OUT},
+				data = linux.EPoll_Data{fd = fd},
+			}
+			linux.epoll_ctl(epoll_fd, .MOD, fd, cast(^linux.EPoll_Event)&event)
+		} else {
+			event := linux.EPoll_Event {
+				events = {.OUT},
+				data = linux.EPoll_Data{fd = fd},
+			}
+			linux.epoll_ctl(epoll_fd, .MOD, fd, &event)
 		}
-		linux.epoll_ctl(epoll_fd, .MOD, fd, &event)
 		return true
 
 	case .Error:
