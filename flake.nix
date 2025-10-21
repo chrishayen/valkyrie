@@ -13,25 +13,8 @@
 
         openssl-static = pkgs.openssl.override { static = true; };
 
-        # Architecture-specific wolfSSL builds
-        wolfssl-static = pkgs.wolfssl.overrideAttrs (oldAttrs: {
-          name = "wolfssl-optimized-5.8.2";
-          configureFlags = [
-            "--enable-static"
-            "--disable-shared"
-            "--enable-tls13"
-            "--enable-alpn"
-            "--enable-session-ticket"
-            "--enable-harden"
-            "--enable-extended-master"
-          ] ++ (if pkgs.stdenv.isx86_64 then [
-            "--enable-sp"
-            "--enable-sp-asm"
-            "--enable-intelasm"
-            "--enable-aesni"
-          ] else []);
-          # ARM assembly has compatibility issues in static builds, skip optimizations on ARM
-        });
+        # Use default wolfssl with static override
+        wolfssl-static = pkgs.wolfssl.override { static = true; };
       in
       {
         devShells.default = pkgs.mkShell {
