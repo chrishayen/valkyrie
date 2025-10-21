@@ -45,10 +45,11 @@ jobs:
       - name: Install Odin
         run: |
           cd /tmp
-          git clone --depth 1 https://github.com/odin-lang/Odin
-          cd Odin
-          make
-          sudo cp odin /usr/local/bin/
+          ODIN_VERSION=$(curl -s https://api.github.com/repos/odin-lang/Odin/releases/latest | grep 'tag_name' | cut -d '"' -f 4)
+          curl -L -o odin.tar.gz "https://github.com/odin-lang/Odin/releases/latest/download/odin-linux-${{ matrix.arch }}-${ODIN_VERSION}.tar.gz"
+          tar -xzf odin.tar.gz
+          sudo cp -r odin /opt/odin
+          sudo ln -s /opt/odin/odin /usr/local/bin/odin
           odin version
 
       - name: Build
