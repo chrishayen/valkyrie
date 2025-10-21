@@ -12,12 +12,21 @@
         pkgs = nixpkgs.legacyPackages.${system};
 
         openssl-static = pkgs.openssl.override { static = true; };
+
+        # Custom wolfSSL with required features
+        wolfssl-custom = pkgs.wolfssl.overrideAttrs (oldAttrs: {
+          configureFlags = (oldAttrs.configureFlags or []) ++ [
+            "--enable-alpn"
+            "--enable-tls13"
+            "--enable-session-ticket"
+          ];
+        });
       in
       {
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
             odin
-            wolfssl
+            wolfssl-custom
             openssl-static
             gnumake
             glibc.static
