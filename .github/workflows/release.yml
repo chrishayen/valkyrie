@@ -34,12 +34,13 @@ jobs:
       - name: Build
         run: |
           mkdir -p build
-          nix develop --command odin build . -o:speed -target:${{ matrix.odin_target }} -extra-linker-flags:"-static -lwolfssl -ldl -lpthread" -out:build/valkyrie
+          nix develop --command odin build . -o:speed -target:${{ matrix.odin_target }} -extra-linker-flags:"-static -static-libgcc -lwolfssl" -out:build/valkyrie
 
       - name: Verify binary
         run: |
           file build/valkyrie
           ls -lh build/valkyrie
+          ldd build/valkyrie || echo "Binary is statically linked (expected)"
 
       - name: Create tar.gz archive
         run: |

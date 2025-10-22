@@ -11,15 +11,18 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
 
-        # Custom wolfSSL with required features
-        wolfssl-custom = pkgs.wolfssl.overrideAttrs (oldAttrs: {
+        # Custom wolfSSL with required features, built as static library
+        wolfssl-static = pkgs.wolfssl.overrideAttrs (oldAttrs: {
           configureFlags = (oldAttrs.configureFlags or []) ++ [
             "--enable-alpn"
             "--enable-tls13"
             "--enable-session-ticket"
+            "--enable-static"
+            "--disable-shared"
             "--disable-examples"
             "--disable-crypttests"
           ];
+          dontDisableStatic = true;
           doCheck = false;  # Skip tests
           doInstallCheck = false;  # Skip install checks
         });
@@ -28,7 +31,7 @@
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
             odin
-            wolfssl-custom
+            wolfssl-static
             gnumake
             glibc.static
           ];
