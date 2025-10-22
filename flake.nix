@@ -11,8 +11,6 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
 
-        openssl-static = pkgs.openssl.override { static = true; };
-
         # Custom wolfSSL with required features
         wolfssl-custom = pkgs.wolfssl.overrideAttrs (oldAttrs: {
           configureFlags = (oldAttrs.configureFlags or []) ++ [
@@ -31,7 +29,6 @@
           buildInputs = with pkgs; [
             odin
             wolfssl-custom
-            openssl-static
             gnumake
             glibc.static
           ];
