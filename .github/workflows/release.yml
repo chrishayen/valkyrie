@@ -34,7 +34,7 @@ jobs:
       - name: Build
         run: |
           mkdir -p build
-          nix develop --command odin build . -o:speed -target:${{ matrix.odin_target }} -extra-linker-flags:"-static -static-libgcc -lwolfssl" -out:build/valkyrie
+          nix develop --command odin build . -o:speed -target:${{ matrix.odin_target }} -extra-linker-flags:"-static -lwolfssl -lm -lpthread" -out:build/valkyrie
 
       - name: Verify binary
         run: |

@@ -11,14 +11,13 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
 
-        # Custom wolfSSL with required features, built as static library
+        # Custom wolfSSL with required features, built with static library support
         wolfssl-static = pkgs.wolfssl.overrideAttrs (oldAttrs: {
           configureFlags = (oldAttrs.configureFlags or []) ++ [
             "--enable-alpn"
             "--enable-tls13"
             "--enable-session-ticket"
             "--enable-static"
-            "--disable-shared"
             "--disable-examples"
             "--disable-crypttests"
           ];
